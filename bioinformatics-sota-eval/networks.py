@@ -6,6 +6,7 @@ import torch.nn as nn
 import tensorflow as tf
 import torch.nn.functional as F
 import scipy.sparse as sp_sparse
+import tensorflow.keras as keras
 
 from torch.autograd import Variable
 from collections import defaultdict, Counter
@@ -13,7 +14,28 @@ from collections import defaultdict, Counter
 torch.manual_seed(42)
 
 
-class MaskedLinear(torch.nn.Linear):
+class ANN(nn.Module):
+    def __init__(self, num_input: int, config: dict):
+        super(ANN, self).__init__()
+        self.fc1 = torch.nn.Linear(num_input, 512)
+        self.relu = torch.nn.ReLU()
+        self.fc2 = torch.nn.Linear(512, 1)
+        
+        self.loss = nn.MSELoss()
+        self.optim = torch.optim.Adam(self.parameters(), lr=config['lr'])
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+    
+    
+class GNN(nn.Module):
+    a=3
+
+
+class MaskedLinear(nn.Linear):
     def __init__(self, in_features, out_features, relation_file, bias=True) -> None:
         super(MaskedLinear, self).__init__(in_features, out_features, bias)
 
@@ -70,29 +92,8 @@ class PGNN(nn.Module):
 
         return self.fc3(x)
     
-    
-class ANN(nn.Module):
-    def __init__(self, num_input: int, config: dict):
-        super(ANN, self).__init__()
-        self.fc1 = torch.nn.Linear(num_input, 512)
-        self.relu = torch.nn.ReLU()
-        self.fc2 = torch.nn.Linear(512, 1)
-        
-        self.loss = nn.MSELoss()
-        self.optim = torch.optim.Adam(self.parameters(), lr=config['lr'])
 
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
-    
-    
-class GNN(nn.Module):
-    a=3
-    
-
-class KPNN(tf.keras.Model):
+class KPNN(keras.Model):
     def __init__(self, edges: pd.DataFrame, genes: list, config: dict) -> None:
         """
         Initialize the KPNN (Knowledge-Primed Neural Network) model.
