@@ -161,3 +161,4 @@ cython_debug/
 
 bioinformatics-sota-eval.code-workspace
 bioinformatics-sota-eval/data/tmp/
+.vscode/launch.json

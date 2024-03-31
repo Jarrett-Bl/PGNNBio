@@ -25,7 +25,7 @@ class Driver:
         self.output_dir = output_dir
         self.model_dir = f'{output_dir}/model'
     
-        config_path = 'kpnn/utils/config.yaml'
+        config_path = 'bioinformatics-sota-eval/utils/config.yaml'
         config = self._load_config(config_path)
         
         self._init_hyperparams(config)
@@ -75,10 +75,11 @@ class Driver:
         self.node_dropout = config['hyperparams']['node_dropout']
         self.num_grad_epsilon = config['hyperparams']['num_grad_epsilon']
         
-    def _init_wandb(self, config) -> None:
-        wandb.init(project="CPD", name='KPNN', entity="ethanmclark1")
-        wandb.config.update(config['hyperparams'])
-        wandb.config.update(config['normalization'])
+    def _init_wandb(self, approach: str, config: dict) -> None:
+        wandb.init(project="CPD", name=f'{approach}', entity="ethanmclark1")
+        wandb.config.update(config['batch_size'])
+        wandb.config.update(config['num_epochs'])
+        wandb.config.update(config[f'{approach}'])
         
     def _gather_data(self, input_file: str, edges_file: str, labels_file: str, config: dict) -> tuple:
         """
