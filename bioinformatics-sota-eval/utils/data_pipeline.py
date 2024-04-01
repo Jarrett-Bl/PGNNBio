@@ -56,8 +56,8 @@ class DataPipeline:
         
         data = gene_bc_matrix.matrix.astype('float64')
         
-        tpm_normalization = config['normalization']['TPM']
-        minmax_normalization = config['normalization']['minmax']
+        tpm_normalization = config['TPM']
+        minmax_normalization = config['minmax']
         
         if tpm_normalization:
             data = DataPipeline._normalize_TPM(data)
@@ -300,8 +300,8 @@ class DataPipeline:
         # Extract relevant genes
         data = data[DataPipeline.index_in_list(genes, genes_x), :]
                 
-        test_size = config['hyperparams']['test_size']
-        val_size = config['hyperparams']['val_size']
+        test_size = config['test_size']
+        val_size = config['val_size']
 
         indices = list(range(len(barcodes)))
 

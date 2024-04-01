@@ -1,4 +1,8 @@
 seed: 42
+TPM: True
+minmax: False
+val_size: 0.2
+test_size: 0.2  
 batch_size: 512
 num_epochs: 1500
 

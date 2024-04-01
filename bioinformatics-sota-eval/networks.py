@@ -15,20 +15,30 @@ torch.manual_seed(42)
 
 
 class ANN(nn.Module):
-    def __init__(self, num_input: int, config: dict):
+    def __init__(self, genes: int, config: dict):
         super(ANN, self).__init__()
-        self.fc1 = torch.nn.Linear(num_input, 512)
-        self.relu = torch.nn.ReLU()
-        self.fc2 = torch.nn.Linear(512, 1)
+        
+        num_input = len(genes)
+        self.fc1 = torch.nn.Linear(num_input, 8192)
+        self.fc2 = torch.nn.Linear(8192, 4096)
+        self.fc3 = torch.nn.Linear(4096, 2048)
+        self.fc4 = torch.nn.Linear(2048, 1024)
+        self.fc5 = torch.nn.Linear(1024, 512)
+        self.fc6 = torch.nn.Linear(512, 256)
+        self.fc7 = torch.nn.Linear(256, 128)
+        self.fc8 = torch.nn.Linear(128, 64)
+        self.fc9 = torch.nn.Linear(64, 1)
         
         self.loss = nn.MSELoss()
         self.optim = torch.optim.Adam(self.parameters(), lr=config['lr'])
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
+        layers = list(self.children())[:-1]
+        
+        for layer in layers:
+            x = F.relu(layer(x))
+            
+        return self.fc9(x)
     
     
 class GNN(nn.Module):
