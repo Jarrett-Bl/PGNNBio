@@ -7,14 +7,24 @@ batch_size: 512
 num_epochs: 1500
 
 ann:
-  a: 3
+  lr: 0.001
 gnn:
-  a: 3
+  lr: 0.001
 pgnn:
   momentum: 0
   sgd_lr: 0.001
   adam_lr: 0.0001
   dropout_rate: 0.2
   weight_decay: 0.0001
+  num_cellline_genes: 100
+  num_drug_genes: 100
+  num_pathways: 100
 kpnn:
-  a: 3
+  lambda_: 0.2
+  lr: 0.001
+  val_size: 0.2
+  test_size: 0.2   
+  node_dropout: 0
+  gene_dropout: 0
+  num_grad_epsilon: 0.001
+  optimizer: AdamOptimizer

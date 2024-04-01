@@ -1,10 +1,12 @@
 import os
 import yaml
+import torch
 import wandb
 import numpy as np
 import tensorflow as tf
 
 from arguments import get_arguments
+from torch.utils.data import DataLoader
 from networks import ANN, GNN, PGNN, KPNN
 from utils.data_pipeline import DataPipeline
 
@@ -29,11 +31,10 @@ class Driver:
         config = self._load_config(config_path)
         
         self._init_hyperparams(config)
-        self._init_wandb(config)
-
+        
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, config)
         
-        self.ann = ANN(config)
+        self.ann = ANN(genes, config)
         self.gnn = GNN(config)
         self.pgnn = PGNN(config)
         self.kpnn = KPNN(edges, genes, config)
@@ -64,19 +65,23 @@ class Driver:
         
         self.seed = config['seed']
         np.random.seed(self.seed)
-        self.alpha = config['hyperparams']['alpha']
-        self.lambda_ = config['hyperparams']['lambda_']
-        self.val_size = config['hyperparams']['val_size']
-        self.num_epochs = config['hyperparams']['num_epochs']
-        self.test_size = config['hyperparams']['test_size']
-        self.batch_size = config['hyperparams']['batch_size']
-        self.tpm_normalization = config['normalization']['TPM']
-        self.gene_dropout = config['hyperparams']['gene_dropout']
-        self.node_dropout = config['hyperparams']['node_dropout']
-        self.num_grad_epsilon = config['hyperparams']['num_grad_epsilon']
+        # self.alpha = config['hyperparams']['alpha']
+        # self.lambda_ = config['hyperparams']['lambda_']
+        # self.val_size = config['hyperparams']['val_size']
+        # self.num_epochs = config['hyperparams']['num_epochs']
+        # self.test_size = config['hyperparams']['test_size']
+        # self.batch_size = config['hyperparams']['batch_size']
+        # self.tpm_normalization = config['normalization']['TPM']
+        # self.gene_dropout = config['hyperparams']['gene_dropout']
+        # self.node_dropout = config['hyperparams']['node_dropout']
+        # self.num_grad_epsilon = config['hyperparams']['num_grad_epsilon']
         
     def _init_wandb(self, approach: str, config: dict) -> None:
         wandb.init(project="CPD", name=f'{approach}', entity="ethanmclark1")
+        wandb.config.update(config['TPM'])
+        wandb.config.update(config['minmax'])
+        wandb.config.update(config['val_size'])
+        wandb.config.update(config['test_size'])
         wandb.config.update(config['batch_size'])
         wandb.config.update(config['num_epochs'])
         wandb.config.update(config[f'{approach}'])
@@ -105,13 +110,89 @@ class Driver:
         
         return edges, genes, outputs
     
-    def train(self) -> None:
-        pass
+    def prepare_data(self) -> tuple:
+        train_x, train_Y = self.datasets[0]
+        val_x, val_Y = self.datasets[1]
+        test_x, test_Y = self.datasets[2]
+        
+        train_loader = DataLoader(train_x, train_Y, batch_size=self.batch_size, shuffle=True)
+        val_loader = DataLoader(val_x, val_Y, batch_size=self.batch_size, shuffle=False)
+        test_loader = DataLoader(test_x, test_Y, batch_size=self.batch_size, shuffle=False)
+        
+        return train_loader, val_loader, test_loader
     
-    def test(self) -> None:
-        pass
+    def train(self, name: str, train_loader: DataLoader, val_loader: DataLoader) -> None:
+        approach = getattr(self, name)
+        config = ''
+        self._init_wandb(name, config)
+        
+        train_losses, train_accuracies = [], []
+        val_losses, val_accuracies = [], []
+        
+        for epoch in range(self.num_epochs):
+            train_loss, train_correct = 0, 0
+            val_loss, val_correct = 0, 0
+            for data, labels in train_loader:
+                output = approach(data)
+                loss = self._compute_loss(output, labels)
+                
+                approach.optim.zero_grad()
+                loss.backward()
+                approach.optim.step()
+                
+                train_loss += loss.item()
+                _, predicted = torch.max(output.data, 1)
+                train_correct += (predicted == labels).sum().item()
+                
+            with torch.no_grad():
+                for data, labels in val_loader:
+                    output = approach(data)
+                    loss = self._compute_loss(output, labels)
+                    
+                    val_loss += loss.item()
+                    _, predicted = torch.max(output.data, 1)
+                    val_correct += (predicted == labels).sum().item()
+                    
+            train_loss /= len(train_loader)
+            val_loss /= len(val_loader)
+            train_accuracy = train_correct / len(train_loader.dataset)
+            val_accuracy = val_correct / len(val_loader.dataset)
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
+            train_accuracies.append(train_accuracy)
+            val_accuracies.append(val_accuracy)
+            avg_train_loss = np.mean(val_losses[-self.sma_window:])
+            avg_val_loss = np.mean(val_losses[-self.sma_window:])
+            
+            wandb.log({
+                'Training Loss': avg_train_loss, 
+                'Validation Loss': avg_val_loss,
+                'Training Accuracy': train_accuracy,
+                'Validation Accuracy': val_accuracy}, step=epoch)
+            
+    def test(self, name: str, test_loader: DataLoader) -> None:
+        approach = getattr(self, name)
+        approach.eval()
+        
+        test_loss, test_correct = 0, 0
+        
+        with torch.no_grad():
+            for data, labels in test_loader:
+                output = approach(data)
+                loss = self._compute_loss(output, labels)
+                
+                test_loss += loss.item()
+                _, predicted = torch.max(output.data, 1)
+                test_correct += (predicted == labels).sum().item()
+                
+        test_loss /= len(test_loader)
+        test_accuracy = test_correct / len(test_loader.dataset)
+        
+        wandb.log({
+            'Test Loss': test_loss,
+            'Test Accuracy': test_accuracy})
     
-    def _train_kpnn(self) -> None:
+    def train_kpnn(self) -> None:
         """
         Train the KPNN model.
         """
@@ -207,7 +288,7 @@ class Driver:
         )
         return loss, error, accuracy
         
-    def _test_kpnn(self) -> None:
+    def test_kpnn(self) -> None:
         """
         Test the trained KPNN model.
         """
@@ -230,11 +311,20 @@ class Driver:
                 'Test Accuracy': test_accuracy
             })
             
+        wandb.finish()
+            
             
 if __name__ == '__main__':
     input_data, edge_data, data_labels, output_dir = get_arguments()
     
     driver = Driver(input_data, edge_data, data_labels, output_dir)
     
-    driver.train()
-    driver.test()
+    train_loader, val_loader, test_loader = driver.prepare_data()
+    
+    approaches = ['ann', 'gnn', 'pgnn']
+    for approach in approaches:
+        driver.train(approach, train_loader, val_loader)
+        driver.test(approach, test_loader)
+        
+    driver.train_kpnn(test_loader)
+    driver.test_kpnn(test_loader)
