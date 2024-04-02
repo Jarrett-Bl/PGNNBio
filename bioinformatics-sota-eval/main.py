@@ -6,9 +6,9 @@ import numpy as np
 import tensorflow as tf
 
 from arguments import get_arguments
-from torch.utils.data import DataLoader
 from networks import ANN, GNN, PGNN, KPNN
 from utils.data_pipeline import DataPipeline
+from torch.utils.data import DataLoader, TensorDataset
 
 
 class Driver:
@@ -28,17 +28,15 @@ class Driver:
         self.model_dir = f'{output_dir}/model'
     
         config_path = 'bioinformatics-sota-eval/utils/config.yaml'
-        config = self._load_config(config_path)
+        self.config = self._load_config(config_path)
+                
+        edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
-        self._init_hyperparams(config)
-        
-        edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, config)
-        
-        self.ann = ANN(genes, config)
-        self.gnn = GNN(config)
-        self.pgnn = PGNN(config)
-        self.kpnn = KPNN(edges, genes, config)
-        self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
+        self.ann = ANN(genes, self.config)
+        # self.gnn = GNN(config)
+        # self.pgnn = PGNN(config)
+        # self.kpnn = KPNN(edges, genes, config)
+        # self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
         
     def _load_config(self, config_path: str) -> dict:
         """
@@ -53,37 +51,23 @@ class Driver:
         
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
-        return config
-    
-    def _init_hyperparams(self, config: dict) -> None:
-        """
-        Initialize the hyperparameters from the configuration dictionary.
-
-        Args:
-            config (dict): The configuration dictionary.
-        """
+            
+            for key, value in config.items():
+                if not isinstance(value, dict):
+                    setattr(self, key, value)
         
-        self.seed = config['seed']
         np.random.seed(self.seed)
-        # self.alpha = config['hyperparams']['alpha']
-        # self.lambda_ = config['hyperparams']['lambda_']
-        # self.val_size = config['hyperparams']['val_size']
-        # self.num_epochs = config['hyperparams']['num_epochs']
-        # self.test_size = config['hyperparams']['test_size']
-        # self.batch_size = config['hyperparams']['batch_size']
-        # self.tpm_normalization = config['normalization']['TPM']
-        # self.gene_dropout = config['hyperparams']['gene_dropout']
-        # self.node_dropout = config['hyperparams']['node_dropout']
-        # self.num_grad_epsilon = config['hyperparams']['num_grad_epsilon']
+        
+        return config
         
     def _init_wandb(self, approach: str, config: dict) -> None:
-        wandb.init(project="CPD", name=f'{approach}', entity="ethanmclark1")
-        wandb.config.update(config['TPM'])
-        wandb.config.update(config['minmax'])
-        wandb.config.update(config['val_size'])
-        wandb.config.update(config['test_size'])
-        wandb.config.update(config['batch_size'])
-        wandb.config.update(config['num_epochs'])
+        wandb.init(project="CPD", name=f'{approach.upper()}', entity="ethanmclark1")
+        wandb.config.TPM = config['TPM']
+        wandb.config.minmax = config['minmax']
+        wandb.config.val_size = config['val_size']
+        wandb.config.test_size = config['test_size']
+        wandb.config.batch_size = config['batch_size']
+        wandb.config.num_epochs = config['num_epochs']
         wandb.config.update(config[f'{approach}'])
         
     def _gather_data(self, input_file: str, edges_file: str, labels_file: str, config: dict) -> tuple:
@@ -115,16 +99,27 @@ class Driver:
         val_x, val_Y = self.datasets[1]
         test_x, test_Y = self.datasets[2]
         
-        train_loader = DataLoader(train_x, train_Y, batch_size=self.batch_size, shuffle=True)
-        val_loader = DataLoader(val_x, val_Y, batch_size=self.batch_size, shuffle=False)
-        test_loader = DataLoader(test_x, test_Y, batch_size=self.batch_size, shuffle=False)
+        train_x = torch.tensor(train_x.toarray()).t().float()
+        val_x = torch.tensor(val_x.toarray()).t().float()
+        test_x = torch.tensor(test_x.toarray()).t().float()
+        
+        train_Y = torch.from_numpy(train_Y).float()
+        val_Y = torch.from_numpy(val_Y).float()
+        test_Y = torch.from_numpy(test_Y).float()
+        
+        train = TensorDataset(train_x, train_Y.view(-1))
+        val = TensorDataset(val_x, val_Y.view(-1))
+        test = TensorDataset(test_x, test_Y.view(-1))
+        
+        train_loader = DataLoader(train, batch_size=self.batch_size, shuffle=True)
+        val_loader = DataLoader(val, batch_size=self.batch_size, shuffle=False)
+        test_loader = DataLoader(test, batch_size=self.batch_size, shuffle=False)
         
         return train_loader, val_loader, test_loader
-    
+        
     def train(self, name: str, train_loader: DataLoader, val_loader: DataLoader) -> None:
         approach = getattr(self, name)
-        config = ''
-        self._init_wandb(name, config)
+        self._init_wandb(name, self.config)
         
         train_losses, train_accuracies = [], []
         val_losses, val_accuracies = [], []
@@ -133,21 +128,22 @@ class Driver:
             train_loss, train_correct = 0, 0
             val_loss, val_correct = 0, 0
             for data, labels in train_loader:
-                output = approach(data)
-                loss = self._compute_loss(output, labels)
+                output = approach(data).view(-1)
+                loss = approach.loss(output, labels)
                 
                 approach.optim.zero_grad()
                 loss.backward()
                 approach.optim.step()
                 
+                # TODO: Ensure that output is treated as 512 sample predictions rather than 1 sample
                 train_loss += loss.item()
-                _, predicted = torch.max(output.data, 1)
+                _, predicted = torch.max(output.data)
                 train_correct += (predicted == labels).sum().item()
                 
             with torch.no_grad():
                 for data, labels in val_loader:
-                    output = approach(data)
-                    loss = self._compute_loss(output, labels)
+                    output = approach(data).view(-1)
+                    loss = approach.loss(output, labels)
                     
                     val_loss += loss.item()
                     _, predicted = torch.max(output.data, 1)
@@ -178,8 +174,8 @@ class Driver:
         
         with torch.no_grad():
             for data, labels in test_loader:
-                output = approach(data)
-                loss = self._compute_loss(output, labels)
+                output = approach(data).view(-1)
+                loss = approach.loss(output, labels)
                 
                 test_loss += loss.item()
                 _, predicted = torch.max(output.data, 1)
@@ -321,10 +317,10 @@ if __name__ == '__main__':
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     
-    approaches = ['ann', 'gnn', 'pgnn']
+    approaches = ['ann']
     for approach in approaches:
         driver.train(approach, train_loader, val_loader)
         driver.test(approach, test_loader)
         
-    driver.train_kpnn(test_loader)
-    driver.test_kpnn(test_loader)
+    driver.train_kpnn()
+    driver.test_kpnn()
