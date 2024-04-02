@@ -29,11 +29,11 @@ class ANN(nn.Module):
         self.fc8 = torch.nn.Linear(128, 64)
         self.fc9 = torch.nn.Linear(64, 1)
         
-        self.loss = nn.MSELoss()
-        self.optim = torch.optim.Adam(self.parameters(), lr=config['lr'])
+        self.loss = nn.BCEWithLogitsLoss()
+        self.optim = torch.optim.Adam(self.parameters(), lr=config['ann']['alpha'])
 
     def forward(self, x):
-        layers = list(self.children())[:-1]
+        layers = list(self.children())[:-2]
         
         for layer in layers:
             x = F.relu(layer(x))
@@ -42,7 +42,21 @@ class ANN(nn.Module):
     
     
 class GNN(nn.Module):
-    a=3
+    def __init__(self, config: dict):
+        super(GNN, self).__init__()
+        
+        self.fc1 = nn.Linear(256, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 1)
+        
+        self.loss = nn.MSELoss()
+        self.optim = torch.optim.Adam(self.parameters(), lr=config['gnn']['alpha'])
+    
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        
+        return self.fc3(x)
 
 
 class MaskedLinear(nn.Linear):
@@ -71,8 +85,13 @@ class MaskedLinear(nn.Linear):
         return Variable(torch.Tensor(mask))
     
 class PGNN(nn.Module):
-    def __init__(self, num_cellline_genes: int, num_drug_genes: int, num_pathways: int, config: dict) -> None:
+    def __init__(self, config: dict) -> None:
         super(PGNN, self).__init__()
+        
+        num_cellline_genes = config['pgnn']['num_cellline_genes']
+        num_drug_genes = config['pgnn']['num_drug_genes']
+        num_pathways = config['pgnn']['num_pathways']
+        
         self.cell_drug_masked_fc = MaskedLinear(num_cellline_genes + num_drug_genes, num_pathways, 'data/relation.csv')
         self.fc1 = nn.Linear(num_pathways, 256)
         self.fc2 = nn.Linear(256, 256)
@@ -80,15 +99,15 @@ class PGNN(nn.Module):
         
         self.loss = nn.MSELoss()
         
-        sgd_lr = config['hyperparams']['sgd_lr']
-        adam_lr = config['hyperparams']['adam_lr']
-        momentum = config['hyperparams']['momentum']
-        weight_decay = config['hyperparams']['weight_decay']
-        dropout_rate = config['hyperparams']['dropout_rate']
+        sgd_alpha = config['pgnn']['sgd_alpha']
+        adam_alpha = config['pgnn']['adam_alpha']
+        momentum = config['pgnn']['momentum']
+        weight_decay = config['pgnn']['weight_decay']
+        dropout_rate = config['pgnn']['dropout_rate']
         
         self.dropout_rate = dropout_rate
-        self.optim_adam = torch.optim.Adam(self.parameters(), lr=adam_lr, weight_decay=weight_decay)
-        self.optim_sdg = torch.optim.SGD(self.parameters(), lr=sgd_lr, momentum=momentum, weight_decay=weight_decay)
+        self.optim_adam = torch.optim.Adam(self.parameters(), lr=adam_alpha, weight_decay=weight_decay)
+        self.optim_sdg = torch.optim.SGD(self.parameters(), lr=sgd_alpha, momentum=momentum, weight_decay=weight_decay)
         
     def forward(self, cells: torch.tensor, drug: torch.tensor, genes: torch.tensor) -> torch.tensor:
         input_tensor = torch.cat((cells, drug, genes), dim=1)
@@ -137,13 +156,14 @@ class KPNN(keras.Model):
             config (dict): The configuration dictionary.
         """
         tf.set_random_seed(config['seed'])
-        self.alpha = config['hyperparams']['alpha']
-        self.lambda_ = config['hyperparams']['lambda_']
-        self.optim_name = config['hyperparams']['optimizer']
-        self.tpm_normalization = config['normalization']['TPM']
-        self.gene_dropout = config['hyperparams']['gene_dropout']
-        self.node_dropout = config['hyperparams']['node_dropout']
-        self.num_grad_epsilon = config['hyperparams']['num_grad_epsilon']
+        self.alpha = config['kpnn']['alpha']
+        self.tpm_normalization = config['TPM']
+        self.lambda_ = config['kpnn']['lambda_']
+        self.minmax_normalization = config['minmax']
+        self.optim_name = config['kpnn']['optimizer']
+        self.gene_dropout = config['kpnn']['gene_dropout']
+        self.node_dropout = config['kpnn']['node_dropout']
+        self.num_grad_epsilon = config['kpnn']['num_grad_epsilon']
         
     def _rank_nodes_in_hierarchy(self, edges: pd.DataFrame, genes: list) -> list:
         """
