@@ -68,6 +68,7 @@ class Driver:
         wandb.config.test_size = config['test_size']
         wandb.config.batch_size = config['batch_size']
         wandb.config.num_epochs = config['num_epochs']
+        wandb.config.sma_window = config['sma_window']
         wandb.config.update(config[f'{approach}'])
         
     def _gather_data(self, input_file: str, edges_file: str, labels_file: str, config: dict) -> tuple:
@@ -135,9 +136,10 @@ class Driver:
                 loss.backward()
                 approach.optim.step()
                 
-                # TODO: Ensure that output is treated as 512 sample predictions rather than 1 sample
                 train_loss += loss.item()
-                _, predicted = torch.max(output.data)
+                
+                predicted_probs = torch.sigmoid(output)
+                predicted = (predicted_probs > 0.5).float()                
                 train_correct += (predicted == labels).sum().item()
                 
             with torch.no_grad():
@@ -146,7 +148,9 @@ class Driver:
                     loss = approach.loss(output, labels)
                     
                     val_loss += loss.item()
-                    _, predicted = torch.max(output.data, 1)
+                    
+                    predicted_probs = torch.sigmoid(output)
+                    predicted = (predicted_probs > 0.5).float()                
                     val_correct += (predicted == labels).sum().item()
                     
             train_loss /= len(train_loader)
@@ -178,7 +182,8 @@ class Driver:
                 loss = approach.loss(output, labels)
                 
                 test_loss += loss.item()
-                _, predicted = torch.max(output.data, 1)
+                predicted_probs = torch.sigmoid(output)
+                predicted = (predicted_probs > 0.5).float()                
                 test_correct += (predicted == labels).sum().item()
                 
         test_loss /= len(test_loader)
