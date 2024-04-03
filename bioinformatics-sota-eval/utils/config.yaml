@@ -17,9 +17,9 @@ pgnn:
   adam_alpha: 0.0001
   dropout_rate: 0.2
   weight_decay: 0.0001
-  num_cellline_genes: 100
-  num_drug_genes: 100
-  num_pathways: 100
+  num_pathways: 323
+  num_drug_genes: 741
+  num_cellline_genes: 537
 kpnn:
   alpha: 0.001
   lambda_: 0.2

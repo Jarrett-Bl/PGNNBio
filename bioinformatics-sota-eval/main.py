@@ -7,6 +7,7 @@ import tensorflow as tf
 
 from arguments import get_arguments
 from networks import ANN, GNN, PGNN, KPNN
+from sklearn.metrics import roc_auc_score
 from utils.data_pipeline import DataPipeline
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -33,10 +34,10 @@ class Driver:
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
         self.ann = ANN(genes, self.config)
-        # self.gnn = GNN(config)
-        # self.pgnn = PGNN(config)
-        # self.kpnn = KPNN(edges, genes, config)
-        # self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
+        self.gnn = GNN(self.config)
+        self.pgnn = PGNN(self.config)
+        self.kpnn = KPNN(edges, genes, self.config)
+        self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
         
     def _load_config(self, config_path: str) -> dict:
         """
@@ -122,12 +123,15 @@ class Driver:
         approach = getattr(self, name)
         self._init_wandb(name, self.config)
         
-        train_losses, train_accuracies = [], []
-        val_losses, val_accuracies = [], []
+        train_losses, train_aucs = [], []
+        val_losses, val_aucs = [], []
         
         for epoch in range(self.num_epochs):
-            train_loss, train_correct = 0, 0
-            val_loss, val_correct = 0, 0
+            train_loss = 0
+            train_outputs, train_labels = [], []
+            val_loss = 0
+            val_outputs, val_labels = [], []
+            
             for data, labels in train_loader:
                 output = approach(data).view(-1)
                 loss = approach.loss(output, labels)
@@ -139,8 +143,8 @@ class Driver:
                 train_loss += loss.item()
                 
                 predicted_probs = torch.sigmoid(output)
-                predicted = (predicted_probs > 0.5).float()                
-                train_correct += (predicted == labels).sum().item()
+                train_outputs.extend(predicted_probs.detach().cpu().numpy())
+                train_labels.extend(labels.detach().cpu().numpy())
                 
             with torch.no_grad():
                 for data, labels in val_loader:
@@ -150,25 +154,25 @@ class Driver:
                     val_loss += loss.item()
                     
                     predicted_probs = torch.sigmoid(output)
-                    predicted = (predicted_probs > 0.5).float()                
-                    val_correct += (predicted == labels).sum().item()
+                    val_outputs.extend(predicted_probs.detach().cpu().numpy())
+                    val_labels.extend(labels.detach().cpu().numpy())
                     
             train_loss /= len(train_loader)
             val_loss /= len(val_loader)
-            train_accuracy = train_correct / len(train_loader.dataset)
-            val_accuracy = val_correct / len(val_loader.dataset)
+            train_auc = roc_auc_score(train_labels, train_outputs)
+            val_auc = roc_auc_score(val_labels, val_outputs)
             train_losses.append(train_loss)
             val_losses.append(val_loss)
-            train_accuracies.append(train_accuracy)
-            val_accuracies.append(val_accuracy)
+            train_aucs.append(train_auc)
+            val_aucs.append(val_auc)
             avg_train_loss = np.mean(val_losses[-self.sma_window:])
             avg_val_loss = np.mean(val_losses[-self.sma_window:])
             
             wandb.log({
                 'Training Loss': avg_train_loss, 
                 'Validation Loss': avg_val_loss,
-                'Training Accuracy': train_accuracy,
-                'Validation Accuracy': val_accuracy}, step=epoch)
+                'Training AUC': train_auc,
+                'Validation AUC': val_auc}, step=epoch)
             
     def test(self, name: str, test_loader: DataLoader) -> None:
         approach = getattr(self, name)
@@ -198,6 +202,8 @@ class Driver:
         Train the KPNN model.
         """
         
+        self._init_wandb('kpnn', self.config)
+        
         init = tf.global_variables_initializer()
         saver = tf.train.Saver()
 
@@ -224,23 +230,15 @@ class Driver:
 
                     self._run_train_step(sess, train_x_batch, train_Y_batch, y_batch_weights)
 
-                if epoch % 10 == 0:
-                    train_loss, train_error, train_accuracy = self._evaluate_model(sess, train_x_batch, train_Y_batch, y_batch_weights)
-                    val_loss, val_error, val_accuracy = self._evaluate_model(sess, val_x, val_Y, y_val_weights)
-                    
-                    train_error = train_error.mean()
-                    val_error = val_error.mean()
-                    
-                    saver.save(sess, f'{self.model_dir}/model.ckpt', global_step=epoch)
-
-                    wandb.log({
-                        'Training Loss': train_loss,
-                        'Training Error': train_error,
-                        'Training Accuracy': train_accuracy,
-                        'Validation Loss': val_loss,
-                        'Validation Error': val_error,
-                        'Validation Accuracy': val_accuracy
-                    })
+                train_loss, train_auc = self._evaluate_model(sess, train_x_batch, train_Y_batch, y_batch_weights)
+                val_loss, val_auc = self._evaluate_model(sess, val_x, val_Y, y_val_weights)
+                
+                wandb.log({
+                    'Training Loss': train_loss,
+                    'Training AUC': train_auc,
+                    'Validation Loss': val_loss,
+                    'Validation AUC': val_auc
+                })
                     
             saver.save(sess, f'{self.model_dir}/model.ckpt', global_step=self.num_epochs)
                     
@@ -259,8 +257,8 @@ class Driver:
             self.kpnn_vars['genes_orig']: train_x_batch,
             self.kpnn_vars['y_true']: train_Y_batch,
             self.kpnn_vars['y_weights']: y_batch_weights,
-            self.kpnn_vars['node_dropout']: self.node_dropout,
-            self.kpnn_vars['gene_dropout']: self.gene_dropout
+            self.kpnn_vars['node_dropout']: self.config['kpnn']['node_dropout'],
+            self.kpnn_vars['gene_dropout']: self.config['kpnn']['gene_dropout']
         })
 
     def _evaluate_model(self, sess: tf.Session, x: np.ndarray, y_true: np.ndarray, y_weights: np.ndarray) -> tuple:
@@ -274,20 +272,23 @@ class Driver:
             y_weights (np.ndarray): The label weights.
 
         Returns:
-            tuple: A tuple containing the loss, error, and accuracy.
+            tuple: A tuple containing the loss, and accuracy.
         """
         
-        loss, y_hat, error, accuracy = sess.run(
-            [self.kpnn_vars['loss'], self.kpnn_vars['y_hat'], self.kpnn_vars['error'], self.kpnn_vars['accuracy']],
+        loss, y_hat = sess.run([self.kpnn_vars['loss'], self.kpnn_vars['y_hat']],
             feed_dict={
                 self.kpnn_vars['genes_orig']: x,
                 self.kpnn_vars['y_true']: y_true,
                 self.kpnn_vars['y_weights']: y_weights,
-                self.kpnn_vars['node_dropout']: self.node_dropout,
-                self.kpnn_vars['gene_dropout']: self.gene_dropout
+                self.kpnn_vars['node_dropout']: self.config['kpnn']['node_dropout'],
+                self.kpnn_vars['gene_dropout']: self.config['kpnn']['gene_dropout']
             }
         )
-        return loss, error, accuracy
+        
+        y_true = y_true.flatten()
+        y_hat = y_hat.flatten()
+        auc = roc_auc_score(y_true, y_hat)
+        return loss, auc
         
     def test_kpnn(self) -> None:
         """
@@ -304,12 +305,11 @@ class Driver:
             test_x = test_x.toarray()
             test_Y_weights = self.kpnn.get_weight_matrix(test_Y)
 
-            test_loss, test_error, test_accuracy = self._evaluate_model(sess, test_x, test_Y, test_Y_weights)
+            test_loss, test_auc = self._evaluate_model(sess, test_x, test_Y, test_Y_weights)
 
             wandb.log({
                 'Test Loss': test_loss,
-                'Test Error': test_error,
-                'Test Accuracy': test_accuracy
+                'Test AUC': test_auc
             })
             
         wandb.finish()

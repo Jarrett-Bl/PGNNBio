@@ -10,6 +10,7 @@ import tensorflow.keras as keras
 
 from torch.autograd import Variable
 from collections import defaultdict, Counter
+from tensorflow.python.ops import metrics_impl
 
 torch.manual_seed(42)
 
@@ -19,15 +20,12 @@ class ANN(nn.Module):
         super(ANN, self).__init__()
         
         num_input = len(genes)
-        self.fc1 = torch.nn.Linear(num_input, 8192)
-        self.fc2 = torch.nn.Linear(8192, 4096)
-        self.fc3 = torch.nn.Linear(4096, 2048)
-        self.fc4 = torch.nn.Linear(2048, 1024)
-        self.fc5 = torch.nn.Linear(1024, 512)
-        self.fc6 = torch.nn.Linear(512, 256)
-        self.fc7 = torch.nn.Linear(256, 128)
-        self.fc8 = torch.nn.Linear(128, 64)
-        self.fc9 = torch.nn.Linear(64, 1)
+        self.fc1 = torch.nn.Linear(num_input, 4096)
+        self.fc2 = torch.nn.Linear(4096, 1024)
+        self.fc3 = torch.nn.Linear(1024, 256)
+        self.fc4 = torch.nn.Linear(256, 64)
+        self.fc5 = torch.nn.Linear(64, 16)
+        self.fc6 = torch.nn.Linear(16, 1)
         
         self.loss = nn.BCEWithLogitsLoss()
         self.optim = torch.optim.Adam(self.parameters(), lr=config['ann']['alpha'])
@@ -38,7 +36,7 @@ class ANN(nn.Module):
         for layer in layers:
             x = F.relu(layer(x))
             
-        return self.fc9(x)
+        return self.fc6(x)
     
     
 class GNN(nn.Module):
@@ -351,13 +349,6 @@ class KPNN(keras.Model):
         with tf.name_scope("y_hat"):
             y_hat = tf.nn.sigmoid(tf.stack([node_values[x] for x in outputs]))
 
-        with tf.name_scope("error"):
-            error = tf.abs(y_true - y_hat) * y_weights
-            tf.summary.scalar("mean", tf.reduce_mean(error))
-
-        with tf.name_scope("accuracy"):
-            accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.round(y_hat), y_true), tf.float64))
-            tf.summary.scalar("mean", tf.reduce_mean(accuracy))
 
         with tf.name_scope("optimizer"):
             optim_class = getattr(tf.train, self.optim_name)
@@ -373,8 +364,6 @@ class KPNN(keras.Model):
             'y_hat': y_hat,
             'node_dropout': node_dropout,
             'gene_dropout': gene_dropout,
-            'error': error,
-            'accuracy': accuracy
         }
             
     def get_weight_matrix(self, input_labels: np.array) -> np.array:
