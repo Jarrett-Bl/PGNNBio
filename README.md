@@ -49,7 +49,7 @@ Contributions to this repository are welcome. If you encounter any issues or hav
 
 ## License
 
-This project is licensed under the [MIT License](https://claude.ai/chat/LICENSE).
+This project is licensed under the [Apache 2.0 License](LICENSE).
 
 ## Acknowledgments
 
