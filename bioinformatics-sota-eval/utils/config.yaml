@@ -4,13 +4,15 @@ minmax: False
 val_size: 0.2
 test_size: 0.2  
 sma_window: 10
-batch_size: 512
+batch_size: 256
 num_epochs: 1500
 
 ann:
   alpha: 0.001
 gnn:
   alpha: 0.001
+  dropout_rate: 0.4
+  pathway_id: "hsa04660"
 pgnn:
   momentum: 0
   sgd_alpha: 0.001
