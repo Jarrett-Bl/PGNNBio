@@ -1,11 +1,11 @@
 
 # Bioinformatics state-of-the-art Evaluation
 
-This repository aims to evaluate the efficacy of various neural network architectures, including Knowledge-Primed Neural Network (KPNN), Pathway-Guided Neural Network (PGNN), Graph Neural Network (GNN), and Artificial Neural Network (ANN), in predicting T-cell receptor (TCR) stimulation.
+This repository aims to evaluate the efficacy of various sota neural network architectures in the field of bioinformatics, including Knowledge-Primed Neural Network (KPNN), Pathway-Guided Neural Network (PGNN), Graph Neural Network (GNN), and Artificial Neural Network (ANN), in predicting T-cell receptor (TCR) stimulation.
 
 ## Overview
 
-The project focuses on analyzing gene expression data and leveraging prior biological knowledge to enhance the predictive power of neural networks. By incorporating gene hierarchies, pathway information, and graph structures, we aim to improve the performance of models in identifying TCR stimulation patterns.
+The project focuses on analyzing gene expression data and leveraging prior biological knowledge to enhance the predictive power of neural networks. By incorporating gene hierarchies, pathway information, and graph structures, we aim to improve the performance of models in identifying TCR stimulation patterns. Additionally, we aim to understand the strengths and weaknesses of each individual model (Knowledge-Primed Neural Network, Pathway-Guided Neural Network, Graph Neural Network, and Artificial Neural Network) to determine how to best combine them into an effective composite model that leverages the advantages of each approach.
 
 ## Dataset
 
@@ -38,7 +38,7 @@ To run the code and evaluate the models, follow these steps:
 3. Run the main script:
 
    ```
-   $ python main.py --input_data bioinformatics-sota-eval/data/tcr_data.h5 --edge_data bioinfomatics-sota-eval/data/tcr_edge_lst.csv --data_labels bioinformatics-sota-eval/data/tcr_class_labels.csv --output_dir bioinformatics-sota-eval/data/tmp
+   a
    ```
 
 The script will train and evaluate each model on the provided dataset, reporting the performance metrics (i.e., loss, AUC) for training, validation, and test sets. Additionally, the trained models will be saved in the specified output directory.
