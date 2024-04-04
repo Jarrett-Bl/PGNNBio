@@ -1,9 +1,11 @@
 import os
+import torch
 import tables
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp_sparse
 
+from torch.utils.data import Dataset
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 
@@ -321,3 +323,18 @@ class DataPipeline:
         test_Y = np.expand_dims(test_Y, axis=0)
         
         return (train_x, train_Y), (val_x, val_Y), (test_x, test_Y)
+    
+
+# Memory efficient dataset that loads data on the fly
+class CustomDataset(Dataset):
+    def __init__(self, data: sp_sparse.csc_matrix, labels: np.ndarray) -> None:
+        self.data = data
+        self.labels = labels
+
+    def __len__(self) -> int:
+        return self.data.shape[1]
+
+    def __getitem__(self, index: int) -> tuple:
+        x = torch.from_numpy(self.data[:, index].toarray().T).squeeze().float()
+        y = torch.from_numpy(self.labels[:, index]).squeeze().float()
+        return x, y
