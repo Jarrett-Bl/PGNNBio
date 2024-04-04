@@ -6,10 +6,10 @@ import numpy as np
 import tensorflow as tf
 
 from arguments import get_arguments
+from torch.utils.data import DataLoader
 from networks import ANN, GNN, PGNN, KPNN
 from sklearn.metrics import roc_auc_score
-from utils.data_pipeline import DataPipeline
-from torch.utils.data import DataLoader, TensorDataset
+from utils.data_pipeline import DataPipeline, CustomDataset
 
 
 class Driver:
@@ -101,26 +101,20 @@ class Driver:
         val_x, val_Y = self.datasets[1]
         test_x, test_Y = self.datasets[2]
         
-        train_x = torch.tensor(train_x.toarray()).t().float()
-        val_x = torch.tensor(val_x.toarray()).t().float()
-        test_x = torch.tensor(test_x.toarray()).t().float()
+        train_dataset = CustomDataset(train_x, train_Y)
+        val_dataset = CustomDataset(val_x, val_Y)
+        test_dataset = CustomDataset(test_x, test_Y)
         
-        train_Y = torch.from_numpy(train_Y).float()
-        val_Y = torch.from_numpy(val_Y).float()
-        test_Y = torch.from_numpy(test_Y).float()
-        
-        train = TensorDataset(train_x, train_Y.view(-1))
-        val = TensorDataset(val_x, val_Y.view(-1))
-        test = TensorDataset(test_x, test_Y.view(-1))
-        
-        train_loader = DataLoader(train, batch_size=self.batch_size, shuffle=True)
-        val_loader = DataLoader(val, batch_size=self.batch_size, shuffle=False)
-        test_loader = DataLoader(test, batch_size=self.batch_size, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False)
         
         return train_loader, val_loader, test_loader
         
     def train(self, name: str, train_loader: DataLoader, val_loader: DataLoader) -> None:
         approach = getattr(self, name)
+        approach.train()
+        
         self._init_wandb(name, self.config)
         
         train_losses, train_aucs = [], []
@@ -128,9 +122,11 @@ class Driver:
         
         for epoch in range(self.num_epochs):
             train_loss = 0
-            train_outputs, train_labels = [], []
+            train_outputs = np.zeros((0,))
+            train_labels = np.zeros((0,))
             val_loss = 0
-            val_outputs, val_labels = [], []
+            val_outputs = np.zeros((0,))
+            val_labels = np.zeros((0,))
             
             for data, labels in train_loader:
                 output = approach(data).view(-1)
@@ -143,8 +139,8 @@ class Driver:
                 train_loss += loss.item()
                 
                 predicted_probs = torch.sigmoid(output)
-                train_outputs.extend(predicted_probs.detach().cpu().numpy())
-                train_labels.extend(labels.detach().cpu().numpy())
+                train_outputs = np.concatenate((train_outputs, predicted_probs.detach().numpy()))
+                train_labels = np.concatenate((train_labels, labels.detach().numpy()))
                 
             with torch.no_grad():
                 for data, labels in val_loader:
@@ -154,8 +150,8 @@ class Driver:
                     val_loss += loss.item()
                     
                     predicted_probs = torch.sigmoid(output)
-                    val_outputs.extend(predicted_probs.detach().cpu().numpy())
-                    val_labels.extend(labels.detach().cpu().numpy())
+                    val_outputs = np.concatenate((val_outputs, predicted_probs.detach().numpy()))
+                    val_labels = np.concatenate((val_labels, labels.detach().numpy()))
                     
             train_loss /= len(train_loader)
             val_loss /= len(val_loader)
@@ -178,7 +174,9 @@ class Driver:
         approach = getattr(self, name)
         approach.eval()
         
-        test_loss, test_correct = 0, 0
+        test_loss = 0
+        test_outputs = np.zeros((0,))
+        test_labels = np.zeros((0,))
         
         with torch.no_grad():
             for data, labels in test_loader:
@@ -187,15 +185,16 @@ class Driver:
                 
                 test_loss += loss.item()
                 predicted_probs = torch.sigmoid(output)
-                predicted = (predicted_probs > 0.5).float()                
-                test_correct += (predicted == labels).sum().item()
+                
+                test_outputs = np.concatenate((test_outputs, predicted_probs.detach().numpy()))
+                test_labels = np.concatenate((test_labels, labels.detach().numpy()))
                 
         test_loss /= len(test_loader)
-        test_accuracy = test_correct / len(test_loader.dataset)
+        test_auc = roc_auc_score(test_labels, test_outputs)
         
         wandb.log({
             'Test Loss': test_loss,
-            'Test Accuracy': test_accuracy})
+            'Test AUC': test_auc})
     
     def train_kpnn(self) -> None:
         """
