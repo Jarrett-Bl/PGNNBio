@@ -6,25 +6,25 @@ def get_arguments():
     parser.add_argument(
         '--input_data',
         type=str,
-        help='Path to the input data file (.csv or .h5)', default='bioinformatics-sota-eval/data/tcr_data.h5',
+        help='Path to the input data file (.csv or .h5)', default='data/tcr_data.h5',
     )
     
     parser.add_argument(
         '--edge_data',
         type=str,
-        help='Path to the input edges file (.csv or .h5)', default='bioinformatics-sota-eval/data/tcr_edge_lst.csv',
+        help='Path to the input edges file (.csv or .h5)', default='data/tcr_edge_lst.csv',
     )
     
     parser.add_argument(
         '--data_labels',
         type=str,
-        help='Path to the input labels file (.csv or .h5)', default='bioinformatics-sota-eval/data/tcr_class_labels.csv',
+        help='Path to the input labels file (.csv or .h5)', default='data/tcr_class_labels.csv',
     )
     
     parser.add_argument(
         '--output_dir',
         type=str,
-        help='Path to the output directory', default='bioinformatics-sota-eval/data/tmp/',
+        help='Path to the output directory', default='data/tmp/',
     )
     
     args = parser.parse_args()

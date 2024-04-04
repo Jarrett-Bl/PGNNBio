@@ -38,7 +38,7 @@ To run the code and evaluate the models, follow these steps:
 3. Run the main script:
 
    ```
-   a
+   $ python main.py --input_data data/tcr_data.h5 --edge_data data/tcr_edge_lst.csv --data_labels data/tcr_class_labels.csv --output_dir data/tmp
    ```
 
 The script will train and evaluate each model on the provided dataset, reporting the performance metrics (i.e., loss, AUC) for training, validation, and test sets. Additionally, the trained models will be saved in the specified output directory.
