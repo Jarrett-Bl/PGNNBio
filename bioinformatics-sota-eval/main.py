@@ -13,7 +13,14 @@ from utils.data_pipeline import DataPipeline, CustomDataset
 
 
 class Driver:
-    def __init__(self, input_file: str, edges_file: str, labels_file: str, output_dir: str) -> None:
+    def __init__(self, 
+                 input_file: str, 
+                 edges_file: str, 
+                 labels_file: str, 
+                 pathways_file: str, 
+                 relations_file: str, 
+                 output_dir: str
+                 ) -> None:
         """
         Initialize the Driver class.
 
@@ -34,10 +41,10 @@ class Driver:
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
         self.ann = ANN(genes, self.config)
-        self.gnn = GNN(self.config)
-        self.pgnn = PGNN(self.config)
-        self.kpnn = KPNN(edges, genes, self.config)
-        self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
+        # self.gnn = GNN(self.config)
+        self.pgnn = PGNN(pathways_file, relations_file, genes, self.config)
+        # self.kpnn = KPNN(edges, genes, self.config)
+        # self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
         
     def _load_config(self, config_path: str) -> dict:
         """
@@ -315,13 +322,13 @@ class Driver:
             
             
 if __name__ == '__main__':
-    input_data, edge_data, data_labels, output_dir = get_arguments()
+    input_data, edge_data, data_labels, pathways, relations, output_dir = get_arguments()
     
-    driver = Driver(input_data, edge_data, data_labels, output_dir)
+    driver = Driver(input_data, edge_data, data_labels, pathways, relations, output_dir)
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     
-    approaches = ['ann']
+    approaches = ['pgnn']
     for approach in approaches:
         driver.train(approach, train_loader, val_loader)
         driver.test(approach, test_loader)
