@@ -34,7 +34,7 @@ To run the code and evaluate the models, follow these steps:
    $ python main.py --input_data data/tcr_data.h5 --edge_data data/tcr_edge_lst.csv --data_labels data/tcr_class_labels.csv --output_dir data/tmp
    ```
 
-Contributing
+## Contributing
 
 Contributions to this repository are welcome. If you encounter any issues or have suggestions for improvements, please open an issue or submit a pull request.
 
