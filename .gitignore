@@ -164,3 +164,4 @@ bioinformatics-sota-eval/data/tmp/
 .vscode/launch.json
 wandb/
 pykegg_cache.sqlite
+data/tmp

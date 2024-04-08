@@ -41,10 +41,10 @@ class Driver:
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
         self.ann = ANN(genes, self.config)
-        # self.gnn = GNN(self.config)
+        self.gnn = GNN(self.config)
         self.pgnn = PGNN(pathways_file, relations_file, genes, self.config)
-        # self.kpnn = KPNN(edges, genes, self.config)
-        # self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
+        self.kpnn = KPNN(edges, genes, self.config)
+        self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
         
     def _load_config(self, config_path: str) -> dict:
         """
