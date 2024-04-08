@@ -1,24 +1,17 @@
-
 # Bioinformatics state-of-the-art Evaluation
 
-This repository aims to evaluate the efficacy of various sota neural network architectures in the field of bioinformatics, including Knowledge-Primed Neural Network (KPNN), Pathway-Guided Neural Network (PGNN), Graph Neural Network (GNN), and Artificial Neural Network (ANN), in predicting T-cell receptor (TCR) stimulation.
+This repository aims to evaluate the efficacy of state-of-the-art neural network architectures in the field of bioinformatics for predicting T-cell receptor (TCR) stimulation using single-cell RNA sequencing (scRNA-seq) data. The architectures under evaluation include:
 
-## Overview
+1. Knowledge-Primed Neural Network (KPNN): A sparsely connected feed-forward neural network that incorporates prior knowledge about gene hierarchies and regulatory relationships, ensuring high interpretability by mirroring the biological pathway structure.
+2. Pathway-Guided Neural Network (PGNN): A neural network that utilizes a "pathway" layer to aggregate information from multiple biological pathways, including the TCR pathway, and feeds the computed pathway scores into a densely connected artificial neural network for prediction.
+3. Graph Neural Network (GNN): A graph-based model that represents the TCR pathway as a graph, with nodes corresponding to genes and edges representing gene interactions. The GNN employs a message-passing framework and graph convolutional network (GCN) architecture to capture complex dependencies within the pathway.
+4. Artificial Neural Network (ANN): A baseline model consisting of fully connected layers, which learns to predict TCR stimulation directly from gene expression data without incorporating prior biological knowledge or structured representations.
 
-The project focuses on analyzing gene expression data and leveraging prior biological knowledge to enhance the predictive power of neural networks. By incorporating gene hierarchies, pathway information, and graph structures, we aim to improve the performance of models in identifying TCR stimulation patterns. Additionally, we aim to understand the strengths and weaknesses of each individual model (Knowledge-Primed Neural Network, Pathway-Guided Neural Network, Graph Neural Network, and Artificial Neural Network) to determine how to best combine them into an effective composite model that leverages the advantages of each approach.
+By comparing the performance and characteristics of these biologically-informed neural network architectures, this repository aims to provide insights into their strengths and weaknesses in the context of prediction, ultimately guiding future research on developing effective composite models that leverage the advantages of each approach.
 
 ## Dataset
 
-The dataset used in this study consists of gene expression data, gene hierarchy information (in the form of edges), and class labels for TCR stimulation. The dataset is provided in HDF5 and CSV formats.
-
-## Models
-
-The following neural network architectures are implemented and evaluated:
-
-1. **Knowledge-Primed Neural Network (KPNN)**: This model incorporates prior knowledge about gene hierarchies and regulatory relationships into the network structure. By leveraging the hierarchical structure of the data, KPNN aims to enhance the interpretability and performance of the model.
-2. **Pathway-Guided Neural Network (PGNN)**: PGNN utilizes pathway information to guide the learning process. By incorporating knowledge about biological pathways, this model aims to capture the underlying biological mechanisms influencing TCR stimulation.
-3. **Graph Neural Network (GNN)**: GNN represents the T-Cell Receptor pathway as a graph, where nodes represent genes, and edges represent interactions or relationships between genes. By leveraging the graph structure, GNN can simulate patterns and dependencies within the data.
-4. **Artificial Neural Network (ANN)**: ANN serves as a baseline model, consisting of fully connected layers without incorporating any prior knowledge or structured representations.
+The dataset used in this study consists of single-cell RNA sequencing (scRNA-seq) data, along with corresponding biological knowledge in the form of gene hierarchies, pathway information, and graph structures. The scRNA-seq data provides gene expression measurements at the individual cell level. The biological information is used to guide and inform the creation of the neural network architectures, incorporating the relationships and dependencies between genes and pathways. The dataset also includes class labels indicating the presence or absence of TCR stimulation for each cell.
 
 ## Usage
 
@@ -41,9 +34,7 @@ To run the code and evaluate the models, follow these steps:
    $ python main.py --input_data data/tcr_data.h5 --edge_data data/tcr_edge_lst.csv --data_labels data/tcr_class_labels.csv --output_dir data/tmp
    ```
 
-The script will train and evaluate each model on the provided dataset, reporting the performance metrics (i.e., loss, AUC) for training, validation, and test sets. Additionally, the trained models will be saved in the specified output directory.
-
-## Contributing
+Contributing
 
 Contributions to this repository are welcome. If you encounter any issues or have suggestions for improvements, please open an issue or submit a pull request.
 
