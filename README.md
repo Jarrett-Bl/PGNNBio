@@ -59,15 +59,15 @@ If you found this repository helpful, consider citing the following papers:
 </pre>
 
 <pre>@article{deng2020pathway, 
- title={Pathway-Guided Deep Neural Network toward Interpretable and Predictive Modeling of Drug Sensitivity}, 
- author={Deng, Liang and Cai, Yidong and Zhang, Wenbo and Yang, Woosung and Gao, Bo and Liu, Haibo}, 
- journal={Journal of Chemical Information and Modeling}, 
- volume={60}, 
- number={10}, 
- pages={4497--4505}, 
- year={2020}, 
- publisher={American Chemical Society}, 
- doi={10.1021/acs.jcim.0c00331}, 
- pmid={32804489}
+  title={Pathway-Guided Deep Neural Network toward Interpretable and Predictive Modeling of Drug Sensitivity}, 
+  author={Deng, Liang and Cai, Yidong and Zhang, Wenbo and Yang, Woosung and Gao, Bo and Liu, Haibo}, 
+  journal={Journal of Chemical Information and Modeling}, 
+  volume={60}, 
+  number={10}, 
+  pages={4497--4505}, 
+  year={2020}, 
+  publisher={American Chemical Society}, 
+  doi={10.1021/acs.jcim.0c00331}, 
+  pmid={32804489}
 }
- </pre>
+</pre>
