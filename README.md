@@ -42,8 +42,32 @@ Contributions to this repository are welcome. If you encounter any issues or hav
 
 This project is licensed under the [Apache 2.0 License](LICENSE).
 
-## Acknowledgments
+## Paper Citation
 
-We would like to acknowledge the contributors and authors of the datasets and libraries used in this project.
+If you found this repository helpful, consider citing the following papers:
 
-**TODO**
+<pre>
+@article{fortelny2020knowledge,
+  title={Knowledge-primed neural networks enable biologically interpretable deep learning on single-cell sequencing data},
+  author={Fortelny, Nikolaus and Bock, Christoph},
+  journal={Genome biology},
+  volume={21},
+  pages={1--36},
+  year={2020},
+  publisher={Springer}
+}
+</pre>
+
+<pre>@article{deng2020pathway, 
+ title={Pathway-Guided Deep Neural Network toward Interpretable and Predictive Modeling of Drug Sensitivity}, 
+ author={Deng, Liang and Cai, Yidong and Zhang, Wenbo and Yang, Woosung and Gao, Bo and Liu, Haibo}, 
+ journal={Journal of Chemical Information and Modeling}, 
+ volume={60}, 
+ number={10}, 
+ pages={4497--4505}, 
+ year={2020}, 
+ publisher={American Chemical Society}, 
+ doi={10.1021/acs.jcim.0c00331}, 
+ pmid={32804489}
+}
+ </pre>
