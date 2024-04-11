@@ -41,7 +41,7 @@ class Driver:
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
         self.ann = ANN(genes, self.config)
-        self.gnn = GNN(self.config)
+        self.gnn = GNN(genes, self.config)
         self.pgnn = PGNN(pathways_file, relations_file, genes, self.config)
         self.kpnn = KPNN(edges, genes, self.config)
         self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
@@ -202,6 +202,8 @@ class Driver:
         wandb.log({
             'Test Loss': test_loss,
             'Test AUC': test_auc})
+        
+        wandb.finish()
     
     def train_kpnn(self) -> None:
         """
@@ -328,7 +330,7 @@ if __name__ == '__main__':
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     
-    approaches = ['pgnn']
+    approaches = ['ann', 'gnn', 'pgnn']
     for approach in approaches:
         driver.train(approach, train_loader, val_loader)
         driver.test(approach, test_loader)

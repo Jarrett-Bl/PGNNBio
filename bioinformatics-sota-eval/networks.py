@@ -1,13 +1,10 @@
-import csv
 import copy
 import torch
 import pykegg
 import numpy as np
-import igraph as ig
 import pandas as pd
 import requests_cache
 import torch.nn as nn
-import networkx as nx
 import tensorflow as tf
 import torch.nn.functional as F
 import scipy.sparse as sp_sparse
@@ -17,7 +14,6 @@ from torch.autograd import Variable
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv
 from collections import defaultdict, Counter
-from torch_geometric.utils import from_networkx
 
 torch.manual_seed(42)
 
@@ -29,12 +25,9 @@ class ANN(nn.Module):
         name = self.__class__.__name__.lower()
         
         num_input = len(genes)
-        self.fc1 = torch.nn.Linear(num_input, 4096)
-        self.fc2 = torch.nn.Linear(4096, 1024)
-        self.fc3 = torch.nn.Linear(1024, 256)
-        self.fc4 = torch.nn.Linear(256, 64)
-        self.fc5 = torch.nn.Linear(64, 16)
-        self.fc6 = torch.nn.Linear(16, 1)
+        self.fc1 = torch.nn.Linear(num_input, 128)
+        self.fc2 = torch.nn.Linear(128, 128)
+        self.fc3 = torch.nn.Linear(128, 1)
         
         self.loss = nn.BCEWithLogitsLoss()
         self.optim = torch.optim.Adam(self.parameters(), lr=config[name]['alpha'])
@@ -45,67 +38,79 @@ class ANN(nn.Module):
         for layer in layers:
             x = F.relu(layer(x))
             
-        return self.fc6(x)
+        return self.fc3(x)
     
     
 class GNN(nn.Module):
-    def __init__(self, config: dict):
+    def __init__(self, gene_names: list, config: dict):
         super(GNN, self).__init__()
         
         name = self.__class__.__name__.lower()
-        graph = self._build_graph(config[name]['pathway_id'])
         
-        num_node_features = graph.x.size()
-        
-        self.conv1 = GCNConv(num_node_features, 256)
-        self.conv2 = GCNConv(256, 256)
-        self.fc = nn.Linear(256, 1)
-        
-        self.fc1 = nn.Linear(256, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 1)
+        self._build_graph(gene_names, config[name]['pathway_id'])
+                
+        self.conv1 = GCNConv(self.graph_data.num_nodes, 128)
+        self.conv2 = GCNConv(128, 128)
+        self.fc = nn.Linear(128, 1)
         
         self.loss = nn.MSELoss()
         self.dropout_rate = config[name]['dropout_rate']
         self.optim = torch.optim.Adam(self.parameters(), lr=config[name]['alpha'])
     
-    # TODO: Finish building the graph
-    # Graph should contain the adjacency matrix and node features
-    def _build_graph(self, pathway_id: str) -> Data:
+    def _build_graph(self, gene_names: list, pathway_id: str):
         requests_cache.install_cache('pykegg_cache')
         kgml_graph = pykegg.KGML_graph(pid=pathway_id)
+                
+        kgml_nodes = kgml_graph.get_nodes()
+        kgml_edges = kgml_graph.get_edges()
         
-        # Get the nodes and edges dataframes
-        node_df = kgml_graph.get_nodes()
-        edge_df = kgml_graph.get_edges()
+        nodes = kgml_nodes[kgml_nodes.original_type == 'gene']        
+        edges = kgml_edges[kgml_edges.entry1.isin(nodes.id) & kgml_edges.entry2.isin(nodes.id)]
+        
+        node_names = nodes['graphics_name'].tolist()
+        self._match_genes_to_nodes(gene_names, node_names)
+        
+        node_id_to_index = {id: index for index, id in enumerate(nodes['id'])}
+        node_index = torch.tensor(list(node_id_to_index.values()), dtype=torch.long)
+        
+        edge_index = torch.tensor(edges[['entry1', 'entry2']].apply(lambda x: x.map(node_id_to_index)).values.T, dtype=torch.long)
+        edge_attr = torch.tensor(edges['type'].map({'PPrel': 0, 'GErel': 1}).values, dtype=torch.long)
 
-        # Create node feature matrix
-        node_features = torch.tensor(node_df[["x", "y"]].values, dtype=torch.float)
-
-        # Create edge index tensor
-        edge_index = torch.tensor(edge_df[["source", "target"]].values.T, dtype=torch.long)
-
-        # Create edge attribute tensor (if available)
-        edge_attr = None
-        if "subtype" in edge_df.columns:
-            edge_attr = torch.tensor(edge_df["subtype"].values, dtype=torch.long)
-
-        # Create PyTorch Geometric Data object
-        data = Data(x=node_features, edge_index=edge_index, edge_attr=edge_attr)
-
-        return data
-    
-    def forward(self, data: Data) -> torch.tensor:
-        x, edge_index = data.x, data.edge_index
+        self.graph_data = Data(x=node_index, edge_index=edge_index, edge_attr=edge_attr)
+        
+    def _match_genes_to_nodes(self, gene_names: list, node_names: list) -> list:
+        gene_names = [gene_name[:-5] for gene_name in gene_names]
+        self.gene_indices = defaultdict(lambda: None, {node_name: None for node_name in node_names})     
+           
+        for node_name in node_names:
+            aliases = node_name.split(', ')
+            for alias in aliases:
+                if alias in gene_names:
+                    self.gene_indices[node_name] = gene_names.index(alias)
+                    break
+                
+    def _get_matched_gene_expressions(self, gene_expressions: torch.tensor) -> torch.tensor:
+        x = torch.zeros(gene_expressions.shape[0], self.graph_data.num_nodes, dtype=gene_expressions.dtype)
+        
+        for i, gene_indices in enumerate(self.gene_indices.values()):
+            if gene_indices is not None:
+                x[:, i] = gene_expressions[:, gene_indices]
+                
+        return x
+                        
+    def forward(self, x: torch.tensor) -> torch.tensor:
+        edge_index = self.graph_data.edge_index
+        
+        x = self._get_matched_gene_expressions(x)
         
         x = self.conv1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout_rate)
-        
+
         x = self.conv2(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout_rate)
-                
+
         return self.fc(x)
 
 
@@ -122,7 +127,7 @@ class MaskedLinear(nn.Linear):
         self.register_buffer('mask', mask)
 
         self.iter = 0
-        
+    
     def build_mask(self, relation_file: str) -> Variable:
         mask = []
         
@@ -154,7 +159,6 @@ class MaskedLinear(nn.Linear):
     def forward(self, input: torch.tensor) -> torch.tensor:
         masked_weight = self.weight * self.mask
         return F.linear(input, masked_weight, self.bias)
-    
     
 class PGNN(nn.Module):
     def __init__(self, pathways_file: str, relations_file: str, genes: dict, config: dict) -> None:
