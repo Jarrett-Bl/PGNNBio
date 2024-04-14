@@ -1,6 +1,5 @@
 import os
 import torch
-import mygene
 import tables
 import numpy as np
 import pandas as pd
@@ -52,7 +51,6 @@ class DataPipeline:
         
         gene_bc_matrix = DataPipeline.get_gene_bc_matrix(input_file, genome)
         
-        
         barcodes_x = gene_bc_matrix.barcodes.tolist()
         
         genes_x = gene_bc_matrix.gene_names.tolist()
@@ -69,22 +67,6 @@ class DataPipeline:
             data = DataPipeline._normalize_minmax(data)
         
         return data, genes_x, barcodes_x
-    
-    @staticmethod
-    def map_gene_names(genes: list) -> list:
-        """
-        Map the gene names to their respective gene symbols.
-
-        Args:
-            genes (list): A list of gene names.
-
-        Returns:
-            list: A list of gene symbols.
-        """
-        
-        mg = mygene.MyGeneInfo()        
-        result = mg.querymany(genes, scopes='symbol', fields='kegg', species='human')
-        return {item['query']: item['kegg']['gene'] for item in result if 'kegg' in item}
             
     @staticmethod
     def get_gene_bc_matrix(input_file: str, genome: str) -> GeneBCMatrix:
