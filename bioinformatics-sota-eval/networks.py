@@ -11,9 +11,10 @@ import scipy.sparse as sp_sparse
 import tensorflow.keras as keras
 
 from torch.autograd import Variable
-from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv
+from torch_geometric.data import Data, Batch
 from collections import defaultdict, Counter
+from sklearn.preprocessing import LabelEncoder
+from torch_geometric.nn import GATConv, global_mean_pool
 
 torch.manual_seed(42)
 
@@ -49,11 +50,11 @@ class GNN(nn.Module):
         
         self._build_graph(gene_names, config[name]['pathway_id'])
                 
-        self.conv1 = GCNConv(self.graph_data.num_nodes, 128)
-        self.conv2 = GCNConv(128, 128)
-        self.fc = nn.Linear(128, 1)
+        self.conv1 = GATConv(1, 32)
+        self.conv2 = GATConv(32, 23)
+        self.fc = nn.Linear(32, 1)
         
-        self.loss = nn.MSELoss()
+        self.loss = nn.BCEWithLogitsLoss()
         self.dropout_rate = config[name]['dropout_rate']
         self.optim = torch.optim.Adam(self.parameters(), lr=config[name]['alpha'])
     
@@ -67,48 +68,72 @@ class GNN(nn.Module):
         nodes = kgml_nodes[kgml_nodes.original_type == 'gene']        
         edges = kgml_edges[kgml_edges.entry1.isin(nodes.id) & kgml_edges.entry2.isin(nodes.id)]
         
-        node_names = nodes['graphics_name'].tolist()
-        self._match_genes_to_nodes(gene_names, node_names)
+        self._match_genes_to_nodes(gene_names, nodes)
         
         node_id_to_index = {id: index for index, id in enumerate(nodes['id'])}
-        node_index = torch.tensor(list(node_id_to_index.values()), dtype=torch.long)
         
+        # Iterates through edge list and maps node IDs to their respective indices in node_id_to_index
         edge_index = torch.tensor(edges[['entry1', 'entry2']].apply(lambda x: x.map(node_id_to_index)).values.T, dtype=torch.long)
-        edge_attr = torch.tensor(edges['type'].map({'PPrel': 0, 'GErel': 1}).values, dtype=torch.long)
-
-        self.graph_data = Data(x=node_index, edge_index=edge_index, edge_attr=edge_attr)
         
-    def _match_genes_to_nodes(self, gene_names: list, node_names: list) -> list:
+        subtype_encoder = LabelEncoder()
+        
+        edge_attr = edges[['type', 'subtypes']].copy()
+        edge_attr.loc[:, 'type'] = edge_attr['type'].map({'PPrel': 0, 'GErel': 1}).values
+        edge_attr.loc[:, 'subtypes'] = edge_attr['subtypes'].apply(lambda x: ', '.join(map(str, x)))
+        edge_attr.loc[:, 'subtypes'] = subtype_encoder.fit_transform(edge_attr.loc[:, 'subtypes'])
+        
+        edge_attr = torch.tensor(edge_attr.values, dtype=torch.long)
+
+        self.graph_data = Data(num_nodes=len(nodes), edge_index=edge_index, edge_attr=edge_attr)
+        
+    def _match_genes_to_nodes(self, gene_names: list, nodes: pd.DataFrame) -> list:
         gene_names = [gene_name[:-5] for gene_name in gene_names]
+        node_names = nodes['graphics_name'].tolist()
         self.gene_indices = defaultdict(lambda: None, {node_name: None for node_name in node_names})     
            
         for node_name in node_names:
             aliases = node_name.split(', ')
             for alias in aliases:
+                alias = alias.replace('...', '')
                 if alias in gene_names:
                     self.gene_indices[node_name] = gene_names.index(alias)
                     break
-                
-    def _get_matched_gene_expressions(self, gene_expressions: torch.tensor) -> torch.tensor:
-        x = torch.zeros(gene_expressions.shape[0], self.graph_data.num_nodes, dtype=gene_expressions.dtype)
+    
+    def _prepare_data(self, gene_expressions: torch.tensor) -> torch.tensor:
+        batch_size = gene_expressions.shape[0]
+        num_nodes = self.graph_data.num_nodes
+        x = torch.zeros(batch_size, num_nodes, 1, dtype=gene_expressions.dtype)
         
         for i, gene_indices in enumerate(self.gene_indices.values()):
             if gene_indices is not None:
-                x[:, i] = gene_expressions[:, gene_indices]
-                
-        return x
-                        
-    def forward(self, x: torch.tensor) -> torch.tensor:
+                x[:, i, 0] = gene_expressions[:, gene_indices]
+        
         edge_index = self.graph_data.edge_index
+        edge_attr = self.graph_data.edge_attr
         
-        x = self._get_matched_gene_expressions(x)
+        batch = torch.arange(batch_size).repeat_interleave(num_nodes)
+
+        data = Batch(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)
         
-        x = self.conv1(x, edge_index)
+        return data
+    
+    def forward(self, gene_expressions: torch.tensor) -> torch.tensor:        
+        data = self._prepare_data(gene_expressions)
+        
+        num_samples = data.x.shape[0]
+        num_nodes = data.x.shape[1]
+        
+        x = data.x.view(num_samples * num_nodes, -1)
+        
+        x = self.conv1(x, data.edge_index, data.edge_attr)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout_rate)
 
-        x = self.conv2(x, edge_index)
+        x = self.conv2(x, data.edge_index, data.edge_attr)
         x = F.relu(x)
+        x = F.dropout(x, p=self.dropout_rate)
+        
+        x = global_mean_pool(x, data.batch)
         x = F.dropout(x, p=self.dropout_rate)
 
         return self.fc(x)
@@ -421,7 +446,6 @@ class KPNN(keras.Model):
 
         with tf.name_scope("y_hat"):
             y_hat = tf.nn.sigmoid(tf.stack([node_values[x] for x in outputs]))
-
 
         with tf.name_scope("optimizer"):
             optim_class = getattr(tf.train, self.optim_name)
