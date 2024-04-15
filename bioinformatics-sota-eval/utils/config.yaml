@@ -10,12 +10,12 @@ num_epochs: 1500
 ann:
   alpha: 0.001
 gnn:
-  alpha: 0.001
-  dropout_rate: 0.4
+  alpha: 0.0001
+  dropout_rate: 0.2
   pathway_id: "hsa04660"
 pgnn:
   alpha: 0.001
-  dropout_rate: 0.2
+  dropout_rate: 0
   weight_decay: 0.0001
 kpnn:
   alpha: 0.001

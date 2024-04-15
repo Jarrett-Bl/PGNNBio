@@ -51,7 +51,7 @@ class GNN(nn.Module):
         self._build_graph(gene_names, config[name]['pathway_id'])
                 
         self.conv1 = GATConv(1, 32)
-        self.conv2 = GATConv(32, 23)
+        self.conv2 = GATConv(32, 32)
         self.fc = nn.Linear(32, 1)
         
         self.loss = nn.BCEWithLogitsLoss()
