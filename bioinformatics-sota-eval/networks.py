@@ -9,6 +9,7 @@ import tensorflow as tf
 import torch.nn.functional as F
 import scipy.sparse as sp_sparse
 import tensorflow.keras as keras
+import xml.etree.ElementTree as ET
 
 from torch.autograd import Variable
 from torch_geometric.data import Data, Batch
@@ -43,70 +44,105 @@ class ANN(nn.Module):
     
     
 class GNN(nn.Module):
-    def __init__(self, gene_names: list, config: dict):
+    def __init__(self, gene_names: list, pathways_file: str, config: dict):
         super(GNN, self).__init__()
         
         name = self.__class__.__name__.lower()
         
-        self._build_graph(gene_names, config[name]['pathway_id'])
-                
-        self.conv1 = GATConv(1, 32)
-        self.conv2 = GATConv(32, 32)
-        self.fc = nn.Linear(32, 1)
+        num_heads = config[name]['num_heads']
+        hidden_channels = config[name]['hidden_channels']
+        
+        self.graphs = {}
+        self.subtype_encoder = LabelEncoder()
+        self._get_graphs(gene_names, pathways_file)
+        
+        self.conv1 = GATConv(1, hidden_channels, heads=num_heads, concat=True)
+        self.conv2 = GATConv(hidden_channels * num_heads, hidden_channels * num_heads, heads=1, concat=False)
+        self.fc = nn.Linear(hidden_channels * num_heads, 1)
         
         self.loss = nn.BCEWithLogitsLoss()
         self.dropout_rate = config[name]['dropout_rate']
         self.optim = torch.optim.Adam(self.parameters(), lr=config[name]['alpha'])
+        
+    def _get_graphs(self, gene_names: list, pathways_file: str) -> None:
+        kegg_ids = set()
+        with open(pathways_file, 'r') as file:
+            for line in file:
+                split_line = line.strip().split('\t')
+                kegg_id = split_line[1]
+                kegg_ids.add(kegg_id)
+        
+        for kegg_id in kegg_ids:
+            graph, matched_genes = self._build_graph(gene_names, kegg_id)
+            if graph is not None:
+                self.graphs[kegg_id] = (graph, matched_genes)
     
     def _build_graph(self, gene_names: list, pathway_id: str):
-        requests_cache.install_cache('pykegg_cache')
-        kgml_graph = pykegg.KGML_graph(pid=pathway_id)
-                
-        kgml_nodes = kgml_graph.get_nodes()
-        kgml_edges = kgml_graph.get_edges()
-        
-        nodes = kgml_nodes[kgml_nodes.original_type == 'gene']        
-        edges = kgml_edges[kgml_edges.entry1.isin(nodes.id) & kgml_edges.entry2.isin(nodes.id)]
-        
-        self._match_genes_to_nodes(gene_names, nodes)
-        
-        node_id_to_index = {id: index for index, id in enumerate(nodes['id'])}
-        
-        # Iterates through edge list and maps node IDs to their respective indices in node_id_to_index
-        edge_index = torch.tensor(edges[['entry1', 'entry2']].apply(lambda x: x.map(node_id_to_index)).values.T, dtype=torch.long)
-        
-        subtype_encoder = LabelEncoder()
-        
-        edge_attr = edges[['type', 'subtypes']].copy()
-        edge_attr.loc[:, 'type'] = edge_attr['type'].map({'PPrel': 0, 'GErel': 1}).values
-        edge_attr.loc[:, 'subtypes'] = edge_attr['subtypes'].apply(lambda x: ', '.join(map(str, x)))
-        edge_attr.loc[:, 'subtypes'] = subtype_encoder.fit_transform(edge_attr.loc[:, 'subtypes'])
-        
-        edge_attr = torch.tensor(edge_attr.values, dtype=torch.long)
+        try:
+            requests_cache.install_cache('pykegg_cache')
+            kgml_graph = pykegg.KGML_graph(pid=pathway_id)
+            
+            kgml_nodes = kgml_graph.get_nodes()
+            kgml_edges = kgml_graph.get_edges()
+                    
+            nodes = kgml_nodes[kgml_nodes.original_type == 'gene']        
+            edges = kgml_edges[kgml_edges.entry1.isin(nodes.id) & kgml_edges.entry2.isin(nodes.id)]
+            
+            matched_genes = self._match_genes_to_nodes(gene_names, nodes)
+            
+            node_id_to_index = {id: index for index, id in enumerate(nodes['id'])}
+            
+            # Iterates through edge list and maps node IDs to their respective indices in node_id_to_index
+            edge_index = torch.tensor(edges[['entry1', 'entry2']].apply(lambda x: x.map(node_id_to_index)).values.T, dtype=torch.long)
+            
+            if edge_index.shape[1] == 0:
+                raise ValueError
+                        
+            edge_attr = edges[['type', 'subtypes']].copy()
+            edge_attr.loc[:, 'type'] = edge_attr['type'].map({'PPrel': 0, 'GErel': 1}).values
+            edge_attr.loc[:, 'subtypes'] = edge_attr['subtypes'].apply(lambda x: ', '.join(map(str, x)))
+            edge_attr.loc[:, 'subtypes'] = self.subtype_encoder.fit_transform(edge_attr.loc[:, 'subtypes'])
+            edge_attr = torch.tensor(edge_attr.values, dtype=torch.long)
 
-        self.graph_data = Data(num_nodes=len(nodes), edge_index=edge_index, edge_attr=edge_attr)
+            graph_data = Data(num_nodes=len(nodes), edge_index=edge_index, edge_attr=edge_attr)
+        except (AttributeError, ET.ParseError, ValueError):
+            graph_data = None
+            matched_genes = None
+            
+        return graph_data, matched_genes
         
     def _match_genes_to_nodes(self, gene_names: list, nodes: pd.DataFrame) -> list:
         gene_names = [gene_name[:-5] for gene_name in gene_names]
         node_names = nodes['graphics_name'].tolist()
-        self.gene_indices = defaultdict(lambda: None, {node_name: None for node_name in node_names})     
+        gene_indices = defaultdict(lambda: None, {node_name: None for node_name in node_names})     
            
         for node_name in node_names:
             aliases = node_name.split(', ')
             for alias in aliases:
                 alias = alias.replace('...', '')
                 if alias in gene_names:
-                    self.gene_indices[node_name] = gene_names.index(alias)
+                    gene_indices[node_name] = gene_names.index(alias)
                     break
+                
+        return gene_indices
     
     def _prepare_data(self, gene_expressions: torch.tensor) -> torch.tensor:
+        for graph_data, gene_indices in self.graphs.values():
+            if gene_indices is not None:
+                a=3
+                
         batch_size = gene_expressions.shape[0]
         num_nodes = self.graph_data.num_nodes
         x = torch.zeros(batch_size, num_nodes, 1, dtype=gene_expressions.dtype)
         
+        valid_indices = [idx for idx in self.gene_indices.values() if idx is not None]
+        
         for i, gene_indices in enumerate(self.gene_indices.values()):
             if gene_indices is not None:
                 x[:, i, 0] = gene_expressions[:, gene_indices]
+            # Impute missing values with the mean of the gene expressions
+            else:
+                x[:, i, 0] = gene_expressions[:, valid_indices].mean(dim=1)
         
         edge_index = self.graph_data.edge_index
         edge_attr = self.graph_data.edge_attr
@@ -126,13 +162,17 @@ class GNN(nn.Module):
         x = data.x.view(num_samples * num_nodes, -1)
         
         x = self.conv1(x, data.edge_index, data.edge_attr)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout_rate)
-
-        x = self.conv2(x, data.edge_index, data.edge_attr)
-        x = F.relu(x)
+        x = F.elu(x)
         x = F.dropout(x, p=self.dropout_rate)
         
+        x_skip = x
+
+        x = self.conv2(x, data.edge_index, data.edge_attr)
+        x = F.elu(x)
+        x = F.dropout(x, p=self.dropout_rate)
+        
+        x = x + x_skip
+
         x = global_mean_pool(x, data.batch)
         x = F.dropout(x, p=self.dropout_rate)
 
@@ -166,14 +206,15 @@ class MaskedLinear(nn.Linear):
                 mask.append(l)
                 
         return Variable(torch.Tensor(mask))
-        
+    
+    # TODO: Modify this to account for the additions to the GMT file
     def read_from_gmt(self, gmt_file: str) -> tuple:        
         with open(gmt_file, 'r') as file:
             data = {}
             for line in file:
                 split_line = line.strip().split('\t')
                 pathway = split_line[0][5:]
-                tmp_genes = split_line[2:]
+                tmp_genes = split_line[3:]
                 data[pathway] = tmp_genes
                 
         return data
