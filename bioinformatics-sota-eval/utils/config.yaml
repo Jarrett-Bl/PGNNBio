@@ -10,9 +10,10 @@ num_epochs: 1500
 ann:
   alpha: 0.001
 gnn:
-  alpha: 0.0001
-  dropout_rate: 0.2
-  pathway_id: "hsa04660"
+  num_heads: 4
+  alpha: 0.0008
+  dropout_rate: 0.1
+  hidden_channels: 64
 pgnn:
   alpha: 0.001
   dropout_rate: 0
