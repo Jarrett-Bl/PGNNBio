@@ -14,7 +14,6 @@ import xml.etree.ElementTree as ET
 from torch.autograd import Variable
 from torch_geometric.data import Data, Batch
 from collections import defaultdict, Counter
-from sklearn.preprocessing import LabelEncoder
 from torch_geometric.nn import GATConv, global_mean_pool
 
 torch.manual_seed(42)
@@ -46,33 +45,12 @@ class ANN(nn.Module):
 class GNN(nn.Module):
     def __init__(self, gene_names: list, pathways_file: str, config: dict):
         super(GNN, self).__init__()
-        
         name = self.__class__.__name__.lower()
         
-        num_heads = config[name]['num_heads']
-        hidden_channels = config[name]['hidden_channels']
+        self._get_graph(gene_names, pathways_file)
+        self._setup_network(config[name])
         
-        self.graphs = {}
-        self.subtype_encoder = LabelEncoder()
-        self._get_graphs(gene_names, pathways_file)
-        
-        # GNN layers
-        self.conv1 = GATConv(1, hidden_channels, heads=num_heads, concat=True)
-        self.conv2 = GATConv(hidden_channels * num_heads, hidden_channels * num_heads, heads=1, concat=False)
-        self.fc = nn.Linear(hidden_channels * num_heads, 1)
-        
-        num_graphs = len(self.graphs)
-        
-        # Merged output layers
-        self.fc1 = nn.Linear(num_graphs, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 1)
-        
-        self.loss = nn.BCEWithLogitsLoss()
-        self.dropout_rate = config[name]['dropout_rate']
-        self.optim = torch.optim.Adam(self.parameters(), lr=config[name]['alpha'])
-        
-    def _get_graphs(self, gene_names: list, pathways_file: str) -> None:
+    def _get_graph(self, gene_names: list, pathways_file: str) -> None:
         kegg_ids = set()
         with open(pathways_file, 'r') as file:
             for line in file:
@@ -80,12 +58,13 @@ class GNN(nn.Module):
                 kegg_id = split_line[1]
                 kegg_ids.add(kegg_id)
         
+        self.graph = {}
         for kegg_id in kegg_ids:
-            graph, matched_genes = self._build_graph(gene_names, kegg_id)
+            graph, matched_genes = self._gather_graph_info(gene_names, kegg_id)
             if graph is not None:
                 self.graphs[kegg_id] = (graph, matched_genes)
     
-    def _build_graph(self, gene_names: list, pathway_id: str):
+    def _gather_graph_info(self, gene_names: list, pathway_id: str):
         try:
             requests_cache.install_cache('pykegg_cache')
             kgml_graph = pykegg.KGML_graph(pid=pathway_id)
@@ -115,7 +94,27 @@ class GNN(nn.Module):
             matched_genes = None
             
         return graph_data, matched_genes
+    
+    def _setup_network(self, config: dict) -> None:
+        hidden_channels = config['hidden_channels']
+        num_heads = config['num_heads']
         
+        # GNN layers
+        self.conv1 = GATConv(1, hidden_channels, heads=num_heads, concat=True)
+        self.conv2 = GATConv(hidden_channels * num_heads, hidden_channels * num_heads, heads=1, concat=False)
+        self.fc = nn.Linear(hidden_channels * num_heads, 1)
+        
+        num_graphs = len(self.graphs)
+        
+        # Merged output layers
+        self.fc1 = nn.Linear(num_graphs, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 1)
+        
+        self.loss = nn.BCEWithLogitsLoss()
+        self.dropout_rate = config['dropout_rate']
+        self.optim = torch.optim.Adam(self.parameters(), lr=config['alpha'])
+                
     def _match_genes_to_nodes(self, gene_names: list, nodes: pd.DataFrame) -> list:
         gene_indices = []
         gene_names = [gene_name[:-5] for gene_name in gene_names]
@@ -143,7 +142,7 @@ class GNN(nn.Module):
             gene_indices = list(gene_map.values())
             x = torch.zeros(num_samples, num_nodes, 1, dtype=gene_expressions.dtype)
             
-            for i, gene_index in enumerate(gene_map.values()):
+            for i, gene_index in enumerate(gene_indices):
                 if gene_index is not None:
                     x[:, i, 0] = gene_expressions[:, gene_index]
                 else:
@@ -199,7 +198,139 @@ class GNN(nn.Module):
         x = F.dropout(x, p=self.dropout_rate, training=self.training)
         
         return self.fc3(x)
+    
 
+class MegaGNN(GNN):
+    def __init__(self, gene_names: list, pathways_file: str, config: dict):
+        super(MegaGNN, self).__init__(gene_names, pathways_file, config)
+        
+    def _get_graph(self, gene_names: list, pathways_file: str) -> None:
+        kegg_ids = set()
+        with open(pathways_file, 'r') as file:
+            for line in file:
+                split_line = line.strip().split('\t')
+                kegg_id = split_line[1]
+                kegg_ids.add(kegg_id)
+        
+        mega_graph = ()
+        mega_matched_genes = {}
+        
+        for kegg_id in kegg_ids:
+            num_nodes, matched_genes, edges_info = self._gather_graph_info(gene_names, kegg_id)
+            if num_nodes is not None:
+                if len(mega_graph) == 0:
+                    mega_graph = (num_nodes, edges_info)
+                    mega_matched_genes = matched_genes
+                else:
+                    summed_nodes = mega_graph[0] + num_nodes
+                    merged_edges = mega_graph[1].merge(edges_info, how='outer', on=['source', 'target', 'type'])
+                    merged_edges = merged_edges.drop_duplicates()
+                    mega_graph = (summed_nodes, merged_edges)
+                    
+                    mega_matched_genes = {**mega_matched_genes, **matched_genes}
+        
+        num_nodes = mega_graph[0]
+        edges = mega_graph[1].copy()
+        graphic_names_to_id = {name: int(i) for i, name in enumerate(mega_matched_genes.keys())}
+        
+        edges['source'] = edges['source'].map(graphic_names_to_id)
+        edges['target'] = edges['target'].map(graphic_names_to_id)
+        edges = edges.dropna()
+        edge_index = torch.tensor(edges[['source', 'target']].values.T, dtype=torch.long)
+        edge_attr = torch.tensor(edges['type'].values, dtype=torch.long)
+                    
+        mega_graph_data = Data(num_nodes=mega_graph[0], edge_index=edge_index, edge_attr=edge_attr)
+        
+        self.graph = (mega_graph_data, mega_matched_genes)
+        
+    def _gather_graph_info(self, gene_names: list, pathway_id: str):
+        try:
+            requests_cache.install_cache('pykegg_cache')
+            kgml_graph = pykegg.KGML_graph(pid=pathway_id)
+            
+            kgml_nodes = kgml_graph.get_nodes()
+            kgml_edges = kgml_graph.get_edges()
+                    
+            nodes = kgml_nodes[kgml_nodes.original_type == 'gene']       
+            num_nodes = len(nodes) 
+            matched_genes = self._match_genes_to_nodes(gene_names, nodes)
+            
+            edges = kgml_edges[kgml_edges.entry1.isin(nodes.id) & kgml_edges.entry2.isin(nodes.id)]
+            
+            graphic_names = [name.split(',')[0].replace('...', '') for name in nodes['graphics_name'].to_list()]
+            node_id_to_graphics_name = {int(id): name for id, name in zip(nodes['id'], graphic_names)}      
+            
+            edges_info = edges[['entry1', 'entry2', 'type']].copy()      
+            edges_info[['entry1', 'entry2']] = edges_info[['entry1', 'entry2']].applymap(lambda x: node_id_to_graphics_name[x])
+            edges_info['type'] = edges_info['type'].map({'ECrel': 0, 'PPrel': 1, 'GErel': 2})
+            edges_info = edges_info.rename(columns={'entry1': 'source', 'entry2': 'target'})
+        except (AttributeError, ET.ParseError, ValueError):
+            num_nodes = None
+            matched_genes = None
+            edges_info = None
+        
+        return num_nodes, matched_genes, edges_info
+    
+    def _setup_network(self, config: dict) -> None:
+        hidden_channels = config['hidden_channels']
+        num_heads = config['num_heads']
+        
+        self.conv1 = GATConv(1, hidden_channels, heads=num_heads, concat=True)
+        self.conv2 = GATConv(hidden_channels * num_heads, hidden_channels * num_heads, heads=1, concat=False)
+        self.fc = nn.Linear(hidden_channels * num_heads, 1)
+        
+        self.loss = nn.BCEWithLogitsLoss()
+        self.dropout_rate = config['dropout_rate']
+        self.optim = torch.optim.Adam(self.parameters(), lr=config['alpha'])
+        
+    def _prepare_data(self, gene_expressions: torch.tensor) -> torch.tensor:
+        graph = self.graph[0]
+        gene_map = self.graph[1]
+        
+        num_nodes = graph.num_nodes
+        num_samples = gene_expressions.shape[0]
+        x = torch.zeros(num_samples, num_nodes, 1, dtype=gene_expressions.dtype)
+        
+        gene_indices = list(gene_map.values())
+        for i, gene_index in enumerate(gene_indices):
+            if gene_index is not None:
+                x[:, i, 0] = gene_expressions[:, gene_index]
+            else:
+                x[:, i, 0] = gene_expressions[:, gene_indices].mean(dim=1)
+        
+        edge_index = graph.edge_index
+        edge_attr = graph.edge_attr
+        
+        batch = torch.arange(num_samples).repeat_interleave(num_nodes)
+        data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)
+        
+        return data
+    
+    def forward(self, gene_expressions: torch.tensor) -> torch.tensor:
+        data = self._prepare_data(gene_expressions)
+        
+        num_samples = data.x.shape[0]
+        num_nodes = data.x.shape[1]
+        
+        x = data.x
+        edge_index = data.edge_index
+        edge_attr = data.edge_attr
+        batch = data.batch
+        
+        x = x.view(num_samples * num_nodes, -1)
+        
+        x = self.conv1(x, edge_index, edge_attr)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout_rate, training=self.training)
+        
+        x = self.conv2(x, edge_index, edge_attr)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout_rate, training=self.training)
+        
+        x = global_mean_pool(x, batch)
+        
+        return self.fc(x)  
+      
 
 class MaskedLinear(nn.Linear):
     def __init__(self, genes: list, pathways_file: str, relation_file: str, bias: bool=True) -> None:
