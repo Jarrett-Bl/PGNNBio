@@ -56,9 +56,17 @@ class GNN(nn.Module):
         self.subtype_encoder = LabelEncoder()
         self._get_graphs(gene_names, pathways_file)
         
+        # GNN layers
         self.conv1 = GATConv(1, hidden_channels, heads=num_heads, concat=True)
         self.conv2 = GATConv(hidden_channels * num_heads, hidden_channels * num_heads, heads=1, concat=False)
         self.fc = nn.Linear(hidden_channels * num_heads, 1)
+        
+        num_graphs = len(self.graphs)
+        
+        # Merged output layers
+        self.fc1 = nn.Linear(num_graphs, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 1)
         
         self.loss = nn.BCEWithLogitsLoss()
         self.dropout_rate = config[name]['dropout_rate']
@@ -98,11 +106,8 @@ class GNN(nn.Module):
             if edge_index.shape[1] == 0:
                 raise ValueError
                         
-            edge_attr = edges[['type', 'subtypes']].copy()
-            edge_attr.loc[:, 'type'] = edge_attr['type'].map({'PPrel': 0, 'GErel': 1}).values
-            edge_attr.loc[:, 'subtypes'] = edge_attr['subtypes'].apply(lambda x: ', '.join(map(str, x)))
-            edge_attr.loc[:, 'subtypes'] = self.subtype_encoder.fit_transform(edge_attr.loc[:, 'subtypes'])
-            edge_attr = torch.tensor(edge_attr.values, dtype=torch.long)
+            edge_attr = edges['type'].map({'ECrel': 0, 'PPrel': 1, 'GErel': 2})
+            edge_attr = torch.tensor(edge_attr.tolist(), dtype=torch.long)
 
             graph_data = Data(num_nodes=len(nodes), edge_index=edge_index, edge_attr=edge_attr)
         except (AttributeError, ET.ParseError, ValueError):
@@ -112,6 +117,7 @@ class GNN(nn.Module):
         return graph_data, matched_genes
         
     def _match_genes_to_nodes(self, gene_names: list, nodes: pd.DataFrame) -> list:
+        gene_indices = []
         gene_names = [gene_name[:-5] for gene_name in gene_names]
         node_names = nodes['graphics_name'].tolist()
         gene_indices = defaultdict(lambda: None, {node_name: None for node_name in node_names})     
@@ -121,62 +127,78 @@ class GNN(nn.Module):
             for alias in aliases:
                 alias = alias.replace('...', '')
                 if alias in gene_names:
-                    gene_indices[node_name] = gene_names.index(alias)
+                    gene_indices[alias] = gene_names.index(alias)
                     break
+                
+        gene_indices = {k: v for k, v in gene_indices.items() if v is not None}
                 
         return gene_indices
     
     def _prepare_data(self, gene_expressions: torch.tensor) -> torch.tensor:
-        for graph_data, gene_indices in self.graphs.values():
-            if gene_indices is not None:
-                a=3
+        data_list = []
+        num_samples = gene_expressions.shape[0]
+        
+        for graph_data, gene_map in self.graphs.values():
+            num_nodes = graph_data.num_nodes
+            gene_indices = list(gene_map.values())
+            x = torch.zeros(num_samples, num_nodes, 1, dtype=gene_expressions.dtype)
+            
+            for i, gene_index in enumerate(gene_map.values()):
+                if gene_index is not None:
+                    x[:, i, 0] = gene_expressions[:, gene_index]
+                else:
+                    x[:, i, 0] = gene_expressions[:, gene_indices].mean(dim=1)
                 
-        batch_size = gene_expressions.shape[0]
-        num_nodes = self.graph_data.num_nodes
-        x = torch.zeros(batch_size, num_nodes, 1, dtype=gene_expressions.dtype)
-        
-        valid_indices = [idx for idx in self.gene_indices.values() if idx is not None]
-        
-        for i, gene_indices in enumerate(self.gene_indices.values()):
-            if gene_indices is not None:
-                x[:, i, 0] = gene_expressions[:, gene_indices]
-            # Impute missing values with the mean of the gene expressions
-            else:
-                x[:, i, 0] = gene_expressions[:, valid_indices].mean(dim=1)
-        
-        edge_index = self.graph_data.edge_index
-        edge_attr = self.graph_data.edge_attr
-        
-        batch = torch.arange(batch_size).repeat_interleave(num_nodes)
-
-        data = Batch(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)
-        
-        return data
+            edge_index = graph_data.edge_index
+            edge_attr = graph_data.edge_attr
+            
+            batch = torch.arange(num_samples).repeat_interleave(num_nodes)
+            data = Batch(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)
+            data_list.append(data)
+            
+        return data_list
     
-    def forward(self, gene_expressions: torch.tensor) -> torch.tensor:        
-        data = self._prepare_data(gene_expressions)
-        
-        num_samples = data.x.shape[0]
-        num_nodes = data.x.shape[1]
-        
-        x = data.x.view(num_samples * num_nodes, -1)
-        
-        x = self.conv1(x, data.edge_index, data.edge_attr)
-        x = F.elu(x)
-        x = F.dropout(x, p=self.dropout_rate)
-        
-        x_skip = x
+    def forward(self, gene_expressions: torch.tensor) -> torch.tensor:
+        data_list = self._prepare_data(gene_expressions)
 
-        x = self.conv2(x, data.edge_index, data.edge_attr)
-        x = F.elu(x)
-        x = F.dropout(x, p=self.dropout_rate)
+        graph_outputs = []
+        for data in data_list:
+            num_samples = data.x.shape[0]
+            num_nodes = data.x.shape[1]
+            
+            x = data.x
+            edge_index = data.edge_index
+            edge_attr = data.edge_attr
+            batch = data.batch
+            
+            x, edge_index, edge_attr, batch = x.squeeze(), edge_index.squeeze(), edge_attr.squeeze(), batch.squeeze()
+            x = x.view(num_samples * num_nodes, -1)
+
+            x = self.conv1(x, edge_index, edge_attr)
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout_rate, training=self.training)
+
+            x = self.conv2(x, edge_index, edge_attr)
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout_rate, training=self.training)
+
+            x = global_mean_pool(x, batch)
+
+            x = self.fc(x)
+            graph_outputs.append(x)
+            
+        graph_outputs = torch.stack(graph_outputs, dim=1)
+        flattened_outputs = graph_outputs.view(graph_outputs.shape[0], -1)
         
-        x = x + x_skip
-
-        x = global_mean_pool(x, data.batch)
-        x = F.dropout(x, p=self.dropout_rate)
-
-        return self.fc(x)
+        x = self.fc1(flattened_outputs)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout_rate, training=self.training)
+        
+        x = self.fc2(x)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout_rate, training=self.training)
+        
+        return self.fc3(x)
 
 
 class MaskedLinear(nn.Linear):
@@ -207,7 +229,6 @@ class MaskedLinear(nn.Linear):
                 
         return Variable(torch.Tensor(mask))
     
-    # TODO: Modify this to account for the additions to the GMT file
     def read_from_gmt(self, gmt_file: str) -> tuple:        
         with open(gmt_file, 'r') as file:
             data = {}
