@@ -4,8 +4,8 @@ minmax: False
 val_size: 0.2
 test_size: 0.2  
 sma_window: 10
-batch_size: 256
-num_epochs: 1500
+batch_size: 128
+num_epochs: 750
 
 ann:
   alpha: 0.001

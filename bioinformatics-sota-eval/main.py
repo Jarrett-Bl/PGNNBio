@@ -7,8 +7,8 @@ import tensorflow as tf
 
 from arguments import get_arguments
 from torch.utils.data import DataLoader
-from networks import ANN, GNN, PGNN, KPNN
 from sklearn.metrics import roc_auc_score
+from networks import ANN, GNN, MegaGNN, PGNN, KPNN
 from utils.data_pipeline import DataPipeline, CustomDataset
 
 
@@ -41,7 +41,8 @@ class Driver:
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
         self.ann = ANN(genes, self.config)
-        self.gnn = GNN(genes, self.config)
+        self.gnn = GNN(genes, pathways_file, self.config)
+        self.megagnn = MegaGNN(genes, pathways_file, self.config)
         self.pgnn = PGNN(pathways_file, relations_file, genes, self.config)
         self.kpnn = KPNN(edges, genes, self.config)
         self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
@@ -330,7 +331,7 @@ if __name__ == '__main__':
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     
-    approaches = ['ann', 'gnn', 'pgnn', 'kpnn']
+    approaches = ['ann', 'gnn', 'megagnn', 'pgnn']
     for approach in approaches:
         driver.train(approach, train_loader, val_loader)
         driver.test(approach, test_loader)

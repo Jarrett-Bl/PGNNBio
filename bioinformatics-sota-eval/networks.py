@@ -51,15 +51,14 @@ class GNN(nn.Module):
         self._setup_network(config[name])
         
     def _get_graph(self, gene_names: list, pathways_file: str) -> None:
-        kegg_ids = set()
-        with open(pathways_file, 'r') as file:
-            for line in file:
-                split_line = line.strip().split('\t')
-                kegg_id = split_line[1]
-                kegg_ids.add(kegg_id)
+        def kegg_ids_generator(pathways_file):
+            with open(pathways_file, 'r') as file:
+                for line in file:
+                    split_line = line.strip().split('\t')
+                    yield split_line[1]
         
         self.graph = {}
-        for kegg_id in kegg_ids:
+        for kegg_id in kegg_ids_generator(pathways_file):
             graph, matched_genes = self._gather_graph_info(gene_names, kegg_id)
             if graph is not None:
                 self.graphs[kegg_id] = (graph, matched_genes)
@@ -116,7 +115,6 @@ class GNN(nn.Module):
         self.optim = torch.optim.Adam(self.parameters(), lr=config['alpha'])
                 
     def _match_genes_to_nodes(self, gene_names: list, nodes: pd.DataFrame) -> list:
-        gene_indices = []
         gene_names = [gene_name[:-5] for gene_name in gene_names]
         node_names = nodes['graphics_name'].tolist()
         gene_indices = defaultdict(lambda: None, {node_name: None for node_name in node_names})     
@@ -205,39 +203,38 @@ class MegaGNN(GNN):
         super(MegaGNN, self).__init__(gene_names, pathways_file, config)
         
     def _get_graph(self, gene_names: list, pathways_file: str) -> None:
-        kegg_ids = set()
-        with open(pathways_file, 'r') as file:
-            for line in file:
-                split_line = line.strip().split('\t')
-                kegg_id = split_line[1]
-                kegg_ids.add(kegg_id)
+        def kegg_ids_generator(pathways_file):
+            with open(pathways_file, 'r') as file:
+                for line in file:
+                    split_line = line.strip().split('\t')
+                    yield split_line[1]
         
-        mega_graph = ()
+        mega_graph = None
         mega_matched_genes = {}
         
-        for kegg_id in kegg_ids:
+        for kegg_id in kegg_ids_generator(pathways_file):
             num_nodes, matched_genes, edges_info = self._gather_graph_info(gene_names, kegg_id)
             if num_nodes is not None:
-                if len(mega_graph) == 0:
+                if not mega_graph:
                     mega_graph = (num_nodes, edges_info)
                     mega_matched_genes = matched_genes
                 else:
-                    summed_nodes = mega_graph[0] + num_nodes
                     merged_edges = mega_graph[1].merge(edges_info, how='outer', on=['source', 'target', 'type'])
-                    merged_edges = merged_edges.drop_duplicates()
-                    mega_graph = (summed_nodes, merged_edges)
+                    merged_edges.drop_duplicates(inplace=True)
+                    mega_graph = (mega_graph[0] + num_nodes, merged_edges)
                     
                     mega_matched_genes = {**mega_matched_genes, **matched_genes}
         
-        num_nodes = mega_graph[0]
         edges = mega_graph[1].copy()
         graphic_names_to_id = {name: int(i) for i, name in enumerate(mega_matched_genes.keys())}
         
         edges['source'] = edges['source'].map(graphic_names_to_id)
         edges['target'] = edges['target'].map(graphic_names_to_id)
-        edges = edges.dropna()
-        edge_index = torch.tensor(edges[['source', 'target']].values.T, dtype=torch.long)
-        edge_attr = torch.tensor(edges['type'].values, dtype=torch.long)
+        edges.dropna(inplace=True)
+        edge_index = torch.tensor(edges[['source', 'target']].values.T, dtype=torch.int64)
+        edge_attr = torch.tensor(edges['type'].values, dtype=torch.int64)
+        
+        del edges
                     
         mega_graph_data = Data(num_nodes=mega_graph[0], edge_index=edge_index, edge_attr=edge_attr)
         
@@ -252,10 +249,10 @@ class MegaGNN(GNN):
             kgml_edges = kgml_graph.get_edges()
                     
             nodes = kgml_nodes[kgml_nodes.original_type == 'gene']       
+            edges = kgml_edges[kgml_edges.entry1.isin(nodes.id) & kgml_edges.entry2.isin(nodes.id)]
+            
             num_nodes = len(nodes) 
             matched_genes = self._match_genes_to_nodes(gene_names, nodes)
-            
-            edges = kgml_edges[kgml_edges.entry1.isin(nodes.id) & kgml_edges.entry2.isin(nodes.id)]
             
             graphic_names = [name.split(',')[0].replace('...', '') for name in nodes['graphics_name'].to_list()]
             node_id_to_graphics_name = {int(id): name for id, name in zip(nodes['id'], graphic_names)}      
@@ -283,23 +280,19 @@ class MegaGNN(GNN):
         self.dropout_rate = config['dropout_rate']
         self.optim = torch.optim.Adam(self.parameters(), lr=config['alpha'])
         
-    def _prepare_data(self, gene_expressions: torch.tensor) -> torch.tensor:
-        graph = self.graph[0]
-        gene_map = self.graph[1]
-        
-        num_nodes = graph.num_nodes
+    def _prepare_data(self, gene_expressions: torch.tensor) -> torch.tensor:        
+        num_nodes = self.graph[0].num_nodes
         num_samples = gene_expressions.shape[0]
-        x = torch.zeros(num_samples, num_nodes, 1, dtype=gene_expressions.dtype)
+        x = torch.zeros((num_samples, num_nodes, 1), dtype=gene_expressions.dtype)
         
-        gene_indices = list(gene_map.values())
-        for i, gene_index in enumerate(gene_indices):
+        for i, gene_index in enumerate(self.graph[1].values()):
             if gene_index is not None:
-                x[:, i, 0] = gene_expressions[:, gene_index]
+                x[:, i, 0].copy_(gene_expressions[:, gene_index])
             else:
-                x[:, i, 0] = gene_expressions[:, gene_indices].mean(dim=1)
+                x[:, i, 0].fill_(gene_expressions[:, list(self.graph[1].values())].mean(dim=1))
         
-        edge_index = graph.edge_index
-        edge_attr = graph.edge_attr
+        edge_index = self.graph[0].edge_index
+        edge_attr = self.graph[0].edge_attr
         
         batch = torch.arange(num_samples).repeat_interleave(num_nodes)
         data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)
