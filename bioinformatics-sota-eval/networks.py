@@ -57,7 +57,7 @@ class GNN(nn.Module):
                     split_line = line.strip().split('\t')
                     yield split_line[1]
         
-        self.graph = {}
+        self.graphs = {}
         for kegg_id in kegg_ids_generator(pathways_file):
             graph, matched_genes = self._gather_graph_info(gene_names, kegg_id)
             if graph is not None:
