@@ -1,3 +1,4 @@
+import os
 import copy
 import torch
 import pykegg
@@ -137,14 +138,13 @@ class GNN(nn.Module):
         
         for graph_data, gene_map in self.graphs.values():
             num_nodes = graph_data.num_nodes
-            gene_indices = list(gene_map.values())
-            x = torch.zeros(num_samples, num_nodes, 1, dtype=gene_expressions.dtype)
+            x = torch.zeros((num_samples, num_nodes, 1), dtype=gene_expressions.dtype)
             
-            for i, gene_index in enumerate(gene_indices):
+            for i, gene_index in enumerate(gene_map.values()):
                 if gene_index is not None:
-                    x[:, i, 0] = gene_expressions[:, gene_index]
+                    x[:, i, 0].copy_(gene_expressions[:, gene_index])
                 else:
-                    x[:, i, 0] = gene_expressions[:, gene_indices].mean(dim=1)
+                    x[:, i, 0].fill_(gene_expressions[:, gene_map.values()].mean(dim=1))
                 
             edge_index = graph_data.edge_index
             edge_attr = graph_data.edge_attr
@@ -196,6 +196,25 @@ class GNN(nn.Module):
         x = F.dropout(x, p=self.dropout_rate, training=self.training)
         
         return self.fc3(x)
+    
+    def extract_feature_importance(self):
+        weights = self.masked_pathways_fc.weight.detach().numpy()
+        abs_weights = np.abs(weights)
+        output_node_importance = np.sum(abs_weights, axis=1)
+        output_node_importance = output_node_importance / np.sum(output_node_importance)
+        most_important_pathways = np.argsort(output_node_importance)[::-1]
+        
+        pathways = []
+        with open(self.pathways_file, 'r') as file:
+            for line in file:
+                split_line = line.strip().split('\t')
+                pathways.append(split_line[0][5:])
+
+        with open(self.pathways_dir + 'pgnn.txt', 'w') as file:
+            for i in most_important_pathways:
+                file.write(f'{pathways[i]}: {output_node_importance[i]}\n')
+                
+            file.write(f'\nMaximum importance: {pathways[np.argmax(output_node_importance)]} = {np.max(output_node_importance)}\n')
     
 
 class MegaGNN(GNN):
@@ -326,7 +345,7 @@ class MegaGNN(GNN):
       
 
 class MaskedLinear(nn.Linear):
-    def __init__(self, genes: list, pathways_file: str, relation_file: str, bias: bool=True) -> None:
+    def __init__(self, genes: list, pathways_file: str, relation_file: str, bias: bool=False) -> None:
         data = self.read_from_gmt(pathways_file)
         tcr_genes = set(genes)
         
@@ -374,8 +393,12 @@ class MaskedLinear(nn.Linear):
 class PGNN(nn.Module):
     def __init__(self, pathways_file: str, relations_file: str, genes: dict, config: dict) -> None:
         super(PGNN, self).__init__()
-        name = self.__class__.__name__.lower()
+        self.name = self.__class__.__name__.lower()
                 
+        self.pathways_file = pathways_file
+        self.pathways_dir = 'pathway_importance/'
+        os.makedirs(os.path.dirname(self.pathways_dir), exist_ok=True)
+        
         self.masked_pathways_fc = MaskedLinear(genes, pathways_file, relations_file)
         num_pathways = self.masked_pathways_fc.get_num_pathways()
         self.fc1 = nn.Linear(num_pathways, 128)
@@ -384,9 +407,9 @@ class PGNN(nn.Module):
         
         self.loss = nn.BCEWithLogitsLoss()
         
-        alpha = config[name]['alpha']
-        weight_decay = config[name]['weight_decay']
-        dropout_rate = config[name]['dropout_rate']
+        alpha = config[self.name]['alpha']
+        weight_decay = config[self.name]['weight_decay']
+        dropout_rate = config[self.name]['dropout_rate']
         
         self.dropout_rate = dropout_rate
         self.optim = torch.optim.Adam(self.parameters(), lr=alpha, weight_decay=weight_decay)
@@ -401,6 +424,25 @@ class PGNN(nn.Module):
 
         return self.fc3(x)
     
+    def extract_feature_importance(self):
+        weights = self.masked_pathways_fc.weight.detach().numpy()
+        abs_weights = np.abs(weights)
+        output_node_importance = np.sum(abs_weights, axis=1)
+        output_node_importance = output_node_importance / np.sum(output_node_importance)
+        most_important_pathways = np.argsort(output_node_importance)[::-1]
+        
+        pathways = []
+        with open(self.pathways_file, 'r') as file:
+            for line in file:
+                split_line = line.strip().split('\t')
+                pathways.append(split_line[0][5:])
+
+        with open(self.pathways_dir + 'pgnn.txt', 'w') as file:
+            for i in most_important_pathways:
+                file.write(f'{pathways[i]}: {output_node_importance[i]}\n')
+                
+            file.write(f'\nMaximum importance: {pathways[np.argmax(output_node_importance)]} = {np.max(output_node_importance)}\n')
+            
 
 class KPNN(keras.Model):
     def __init__(self, edges: pd.DataFrame, genes: list, config: dict) -> None:

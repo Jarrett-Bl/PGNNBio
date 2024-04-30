@@ -40,10 +40,10 @@ class Driver:
                 
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
-        self.ann = ANN(genes, self.config)
-        self.gnn = GNN(genes, pathways_file, self.config)
-        self.megagnn = MegaGNN(genes, pathways_file, self.config)
         self.pgnn = PGNN(pathways_file, relations_file, genes, self.config)
+        self.gnn = GNN(genes, pathways_file, self.config)
+        self.ann = ANN(genes, self.config)
+        self.megagnn = MegaGNN(genes, pathways_file, self.config)
         self.kpnn = KPNN(edges, genes, self.config)
         self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
         
@@ -128,6 +128,9 @@ class Driver:
         train_losses, train_aucs = [], []
         val_losses, val_aucs = [], []
         
+        best_val_loss = float('inf')
+        patience_counter = 0
+        
         for epoch in range(self.num_epochs):
             train_loss = 0
             train_outputs = np.zeros((0,))
@@ -169,6 +172,7 @@ class Driver:
             val_losses.append(val_loss)
             train_aucs.append(train_auc)
             val_aucs.append(val_auc)
+            
             avg_train_loss = np.mean(val_losses[-self.sma_window:])
             avg_val_loss = np.mean(val_losses[-self.sma_window:])
             
@@ -176,7 +180,16 @@ class Driver:
                 'Training Loss': avg_train_loss, 
                 'Validation Loss': avg_val_loss,
                 'Training AUC': train_auc,
-                'Validation AUC': val_auc}, step=epoch)
+                'Validation AUC': val_auc
+                }, step=epoch)
+            
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= self.patience:
+                    break
             
     def test(self, name: str, test_loader: DataLoader) -> None:
         approach = getattr(self, name)
@@ -205,6 +218,9 @@ class Driver:
             'Test AUC': test_auc})
         
         wandb.finish()
+        
+        if hasattr(approach, 'extract_feature_importance'):
+            approach.extract_feature_importance()
     
     def train_kpnn(self) -> None:
         """
@@ -248,6 +264,14 @@ class Driver:
                     'Validation Loss': val_loss,
                     'Validation AUC': val_auc
                 })
+                
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.patience:
+                        break
                     
             saver.save(sess, f'{self.model_dir}/model.ckpt', global_step=self.num_epochs)
                     
@@ -331,7 +355,7 @@ if __name__ == '__main__':
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     
-    approaches = ['ann', 'gnn', 'megagnn', 'pgnn']
+    approaches = ['pgnn', 'gnn', 'megagnn', 'ann']
     for approach in approaches:
         driver.train(approach, train_loader, val_loader)
         driver.test(approach, test_loader)

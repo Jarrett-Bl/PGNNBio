@@ -1,11 +1,12 @@
 seed: 42
 TPM: True
+patience: 25
 minmax: False
 val_size: 0.2
 test_size: 0.2  
 sma_window: 10
 batch_size: 256
-num_epochs: 500
+num_epochs: 1000
 
 ann:
   alpha: 0.001
