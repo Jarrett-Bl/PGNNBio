@@ -7,18 +7,17 @@ test_size: 0.2
 sma_window: 10
 batch_size: 256
 num_epochs: 1000
-database: 'data/hallmark'
 
 ann:
   alpha: 0.001
 gnn:
-  num_heads: 2
   alpha: 0.001
+  num_heads: 2
   dropout_rate: 0
   hidden_channels: 16
 megagnn:
-  num_heads: 2
   alpha: 0.001
+  num_heads: 2
   dropout_rate: 0
   hidden_channels: 16
 pgnn:

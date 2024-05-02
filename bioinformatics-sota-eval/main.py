@@ -17,6 +17,7 @@ class Driver:
                  input_file: str, 
                  edges_file: str, 
                  labels_file: str, 
+                 database: str,
                  output_dir: str
                  ) -> None:
         """
@@ -32,18 +33,20 @@ class Driver:
         os.makedirs(output_dir, exist_ok=True)
         self.output_dir = output_dir
         self.model_dir = f'{output_dir}/model'
-    
+        
+        self.database = database
+        
         config_path = 'bioinformatics-sota-eval/utils/config.yaml'
         self.config = self._load_config(config_path)
-                
+        
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
-        self.pgnn = PGNN(genes, self.config)
-        # self.gnn = GNN(genes, self.config)
-        # self.ann = ANN(genes, self.config)
-        # self.megagnn = MegaGNN(genes, self.config)
-        # self.kpnn = KPNN(edges, genes, self.config)
-        # self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
+        self.ann = ANN(genes, self.config)
+        self.gnn = GNN(genes, database, self.config)
+        self.pgnn = PGNN(genes, database, self.config)
+        self.megagnn = MegaGNN(genes, database, self.config)
+        self.kpnn = KPNN(edges, genes, self.config)
+        self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
         
     def _load_config(self, config_path: str) -> dict:
         """
@@ -71,8 +74,8 @@ class Driver:
         wandb.init(project="CPD", name=f'{approach.upper()}', entity="ethanmclark1")
         wandb.config.TPM = config['TPM']
         wandb.config.seed = config['seed']
+        wandb.config.database = self.database
         wandb.config.minmax = config['minmax']
-        wandb.config.database = config['database']
         wandb.config.patience = config['patience']
         wandb.config.val_size = config['val_size']
         wandb.config.test_size = config['test_size']
@@ -350,16 +353,17 @@ class Driver:
             
             
 if __name__ == '__main__':
-    input_data, edge_data, data_labels, output_dir = get_arguments()
+    input_data, edge_data, data_labels, database, models, output_dir = get_arguments()
     
-    driver = Driver(input_data, edge_data, data_labels, output_dir)
+    driver = Driver(input_data, edge_data, data_labels, database, output_dir)
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     
-    approaches = ['pgnn']
-    for approach in approaches:
-        driver.train(approach, train_loader, val_loader)
-        driver.test(approach, test_loader)
+    for model in models:
+        if model == 'kpnn':
+            driver.train_kpnn()
+            driver.test_kpnn()
+            continue
         
-    # driver.train_kpnn()
-    # driver.test_kpnn()
+        driver.train(model, train_loader, val_loader)
+        driver.test(model, test_loader)

@@ -22,6 +22,21 @@ def get_arguments():
     )
     
     parser.add_argument(
+        '--database',
+        type=str,
+        choices=['kegg', 'hallmark', 'wiki_pathways'],
+        help='Structure for relations data', default='wiki_pathways',
+    )
+    
+    parser.add_argument(
+        '--model',
+        type=str,
+        nargs='+',
+        help='Models to use',
+        default=['ann'],
+    )
+    
+    parser.add_argument(
         '--output_dir',
         type=str,
         help='Path to the output directory', default='data/tmp/',
@@ -29,4 +44,4 @@ def get_arguments():
     
     args = parser.parse_args()
     
-    return args.input_data, args.edge_data, args.data_labels, args.output_dir
+    return args.input_data, args.edge_data, args.data_labels, args.database, args.model, args.output_dir
