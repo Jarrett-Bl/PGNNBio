@@ -235,6 +235,9 @@ class Driver:
         
         init = tf.global_variables_initializer()
         saver = tf.train.Saver()
+        
+        best_val_loss = float('inf')
+        patience_counter = 0
 
         with tf.Session() as sess:
             sess.run(init)
