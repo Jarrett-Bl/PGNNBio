@@ -7,6 +7,7 @@ test_size: 0.2
 sma_window: 10
 batch_size: 256
 num_epochs: 1000
+database: 'data/hallmark'
 
 ann:
   alpha: 0.001

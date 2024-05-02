@@ -17,8 +17,6 @@ class Driver:
                  input_file: str, 
                  edges_file: str, 
                  labels_file: str, 
-                 pathways_file: str, 
-                 relations_file: str, 
                  output_dir: str
                  ) -> None:
         """
@@ -40,12 +38,12 @@ class Driver:
                 
         edges, genes, outputs = self._gather_data(input_file, edges_file, labels_file, self.config)
         
-        self.pgnn = PGNN(pathways_file, relations_file, genes, self.config)
-        self.gnn = GNN(genes, pathways_file, self.config)
-        self.ann = ANN(genes, self.config)
-        self.megagnn = MegaGNN(genes, pathways_file, self.config)
-        self.kpnn = KPNN(edges, genes, self.config)
-        self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
+        self.pgnn = PGNN(genes, self.config)
+        # self.gnn = GNN(genes, self.config)
+        # self.ann = ANN(genes, self.config)
+        # self.megagnn = MegaGNN(genes, self.config)
+        # self.kpnn = KPNN(edges, genes, self.config)
+        # self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
         
     def _load_config(self, config_path: str) -> dict:
         """
@@ -72,7 +70,10 @@ class Driver:
     def _init_wandb(self, approach: str, config: dict) -> None:
         wandb.init(project="CPD", name=f'{approach.upper()}', entity="ethanmclark1")
         wandb.config.TPM = config['TPM']
+        wandb.config.seed = config['seed']
         wandb.config.minmax = config['minmax']
+        wandb.config.database = config['database']
+        wandb.config.patience = config['patience']
         wandb.config.val_size = config['val_size']
         wandb.config.test_size = config['test_size']
         wandb.config.batch_size = config['batch_size']
@@ -349,16 +350,16 @@ class Driver:
             
             
 if __name__ == '__main__':
-    input_data, edge_data, data_labels, pathways, relations, output_dir = get_arguments()
+    input_data, edge_data, data_labels, output_dir = get_arguments()
     
-    driver = Driver(input_data, edge_data, data_labels, pathways, relations, output_dir)
+    driver = Driver(input_data, edge_data, data_labels, output_dir)
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     
-    approaches = ['pgnn', 'gnn', 'megagnn', 'ann']
+    approaches = ['pgnn']
     for approach in approaches:
         driver.train(approach, train_loader, val_loader)
         driver.test(approach, test_loader)
         
-    driver.train_kpnn()
-    driver.test_kpnn()
+    # driver.train_kpnn()
+    # driver.test_kpnn()

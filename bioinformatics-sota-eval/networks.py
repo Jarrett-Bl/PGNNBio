@@ -7,6 +7,7 @@ import pandas as pd
 import requests_cache
 import torch.nn as nn
 import tensorflow as tf
+import pywikipathways as pwpw
 import torch.nn.functional as F
 import scipy.sparse as sp_sparse
 import tensorflow.keras as keras
@@ -44,30 +45,40 @@ class ANN(nn.Module):
     
     
 class GNN(nn.Module):
-    def __init__(self, gene_names: list, pathways_file: str, config: dict):
+    def __init__(self, gene_names: list, config: dict):
         super(GNN, self).__init__()
         name = self.__class__.__name__.lower()
         
-        self._get_graph(gene_names, pathways_file)
+        self._get_graph(gene_names, config[name]['pathways_file'])
         self._setup_network(config[name])
         
     def _get_graph(self, gene_names: list, pathways_file: str) -> None:
-        def kegg_ids_generator(pathways_file):
+        def id_generator(pathways_file):
             with open(pathways_file, 'r') as file:
                 for line in file:
                     split_line = line.strip().split('\t')
                     yield split_line[1]
         
         self.graphs = {}
-        for kegg_id in kegg_ids_generator(pathways_file):
+        for kegg_id in id_generator(pathways_file):
             graph, matched_genes = self._gather_graph_info(gene_names, kegg_id)
             if graph is not None:
                 self.graphs[kegg_id] = (graph, matched_genes)
     
     def _gather_graph_info(self, gene_names: list, pathway_id: str):
+        if pathway_id.startswith('hsa'):
+            graph_data, matched_genes = self._gather_kegg_info(gene_names, pathway_id)
+        elif pathway_id.startswith('wp'):
+            graph_data, matched_genes = self._gather_wp_info(gene_names, pathway_id)
+        elif pathway_id.startswith('rno'):
+            pathway_id = pathway_id[3:]
+            
+        return graph_data, matched_genes
+            
+    def _gather_kegg_info(self, gene_names: list, kegg_id: str):
         try:
             requests_cache.install_cache('pykegg_cache')
-            kgml_graph = pykegg.KGML_graph(pid=pathway_id)
+            kgml_graph = pykegg.KGML_graph(pid=kegg_id)
             
             kgml_nodes = kgml_graph.get_nodes()
             kgml_edges = kgml_graph.get_edges()
@@ -94,6 +105,9 @@ class GNN(nn.Module):
             matched_genes = None
             
         return graph_data, matched_genes
+    
+    def _gather_wp_info(self, gene_names: list, wp_id: str):
+        a=3
     
     def _setup_network(self, config: dict) -> None:
         hidden_channels = config['hidden_channels']
@@ -198,7 +212,7 @@ class GNN(nn.Module):
         return self.fc3(x)
     
     def extract_feature_importance(self):
-        weights = self.masked_pathways_fc.weight.detach().numpy()
+        weights = self.fc1.weight.detach().numpy()
         abs_weights = np.abs(weights)
         output_node_importance = np.sum(abs_weights, axis=1)
         output_node_importance = output_node_importance / np.sum(output_node_importance)
@@ -218,8 +232,8 @@ class GNN(nn.Module):
     
 
 class MegaGNN(GNN):
-    def __init__(self, gene_names: list, pathways_file: str, config: dict):
-        super(MegaGNN, self).__init__(gene_names, pathways_file, config)
+    def __init__(self, gene_names: list, config: dict):
+        super(MegaGNN, self).__init__(gene_names, config)
         
     def _get_graph(self, gene_names: list, pathways_file: str) -> None:
         def kegg_ids_generator(pathways_file):
@@ -345,34 +359,25 @@ class MegaGNN(GNN):
       
 
 class MaskedLinear(nn.Linear):
-    def __init__(self, genes: list, pathways_file: str, relation_file: str, bias: bool=False) -> None:
-        data = self.read_from_gmt(pathways_file)
+    def __init__(self, genes: list, pathways_file: str, database: str, bias: bool=False) -> None:
+        relations_file = database + '/relations.csv'
+        
+        data = self._read_from_gmt(pathways_file)
         tcr_genes = set(genes)
         
         self.input_genes = len(tcr_genes)
         self.output_genes = len(data)
-        super(MaskedLinear, self).__init__(self.input_genes, self.output_genes, bias)        
+        super(MaskedLinear, self).__init__(self.input_genes, self.output_genes, bias)    
         
-        mask = self.build_mask(relation_file)
+        if not os.path.exists(relations_file):
+            self._build_relations(genes, data, relations_file)
+        
+        mask = self._build_mask(relations_file)
         self.register_buffer('mask', mask)
 
         self.iter = 0
     
-    def build_mask(self, relation_file: str) -> Variable:
-        mask = []
-        
-        with open(relation_file, 'r') as f:
-            # Skip the header
-            next(f)
-            for line in f:
-                l = [int(x) for x in line.strip().split(',')]
-                for item in l:
-                    assert item == 1 or item == 0
-                mask.append(l)
-                
-        return Variable(torch.Tensor(mask))
-    
-    def read_from_gmt(self, gmt_file: str) -> tuple:        
+    def _read_from_gmt(self, gmt_file: str) -> dict:        
         with open(gmt_file, 'r') as file:
             data = {}
             for line in file:
@@ -383,6 +388,29 @@ class MaskedLinear(nn.Linear):
                 
         return data
     
+    def _build_relations(self, genes: list, data: dict, relations_file: str) -> None:
+        genes = [gene[:-5] for gene in genes]
+        
+        with open(relations_file, 'w') as file:
+            file.write(','.join(genes) + '\n')
+            for genes_from_pathway in data.values():
+                line = [1 if gene in genes_from_pathway else 0 for gene in genes]
+                file.write(','.join(map(str, line)) + '\n')
+                
+    def _build_mask(self, relations_file: str) -> Variable:        
+        mask = []
+        
+        with open(relations_file, 'r') as f:
+            # Skip the header
+            next(f)
+            for line in f:
+                l = [int(x) for x in line.strip().split(',')]
+                for item in l:
+                    assert item == 1 or item == 0
+                mask.append(l)
+                
+        return Variable(torch.Tensor(mask))
+    
     def get_num_pathways(self) -> int:
         return self.output_genes
 
@@ -391,15 +419,16 @@ class MaskedLinear(nn.Linear):
         return F.linear(input, masked_weight, self.bias)
     
 class PGNN(nn.Module):
-    def __init__(self, pathways_file: str, relations_file: str, genes: dict, config: dict) -> None:
+    def __init__(self, genes: dict, config: dict) -> None:
         super(PGNN, self).__init__()
         self.name = self.__class__.__name__.lower()
+        self.database = config['database']
+        self.pathways_file = self.database + '/pathways.gmt'
                 
-        self.pathways_file = pathways_file
-        self.pathways_dir = 'pathway_importance/'
+        self.pathways_dir = f'pathway_importance/{self.database}/'
         os.makedirs(os.path.dirname(self.pathways_dir), exist_ok=True)
         
-        self.masked_pathways_fc = MaskedLinear(genes, pathways_file, relations_file)
+        self.masked_pathways_fc = MaskedLinear(genes, self.pathways_file, self.database)
         num_pathways = self.masked_pathways_fc.get_num_pathways()
         self.fc1 = nn.Linear(num_pathways, 128)
         self.fc2 = nn.Linear(128, 128)

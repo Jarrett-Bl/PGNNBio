@@ -22,18 +22,6 @@ def get_arguments():
     )
     
     parser.add_argument(
-        '--pathways',
-        type=str,
-        help='Path to the pathways file (gmt)', default='data/pathways.gmt',
-    )
-    
-    parser.add_argument(
-        '--relations',
-        type=str,
-        help='Path to the relations file (csv)', default='data/relations.csv',
-    )
-    
-    parser.add_argument(
         '--output_dir',
         type=str,
         help='Path to the output directory', default='data/tmp/',
@@ -41,4 +29,4 @@ def get_arguments():
     
     args = parser.parse_args()
     
-    return args.input_data, args.edge_data, args.data_labels, args.pathways, args.relations, args.output_dir
+    return args.input_data, args.edge_data, args.data_labels, args.output_dir
