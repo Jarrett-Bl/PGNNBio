@@ -18,6 +18,7 @@ class Driver:
                  edges_file: str, 
                  labels_file: str, 
                  database: str,
+                 pathway_importance_type: str,
                  output_dir: str
                  ) -> None:
         """
@@ -43,7 +44,7 @@ class Driver:
         
         self.ann = ANN(genes, self.config)
         self.gnn = GNN(genes, database, self.config)
-        self.pgnn = PGNN(genes, database, self.config)
+        self.pgnn = PGNN(genes, database, pathway_importance_type, self.config)
         self.megagnn = MegaGNN(genes, database, self.config)
         self.kpnn = KPNN(edges, genes, self.config)
         self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
@@ -223,8 +224,8 @@ class Driver:
         
         wandb.finish()
         
-        if hasattr(approach, 'extract_feature_importance'):
-            approach.extract_feature_importance()
+        if hasattr(approach, 'extract_pathway_importance'):
+            approach.extract_pathway_importance(test_loader)
     
     def train_kpnn(self) -> None:
         """
@@ -356,9 +357,9 @@ class Driver:
             
             
 if __name__ == '__main__':
-    input_data, edge_data, data_labels, database, models, output_dir = get_arguments()
+    input_data, edge_data, data_labels, database, models, pathway_importance_type, output_dir = get_arguments()
     
-    driver = Driver(input_data, edge_data, data_labels, database, output_dir)
+    driver = Driver(input_data, edge_data, data_labels, database, pathway_importance_type, output_dir)
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     

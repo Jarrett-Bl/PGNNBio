@@ -1,11 +1,14 @@
 import os
+import csv
 import copy
+import shap
 import torch
 import pykegg
 import numpy as np
 import pandas as pd
 import requests_cache
 import torch.nn as nn
+import networkx as nx
 import tensorflow as tf
 import pywikipathways as pwpw
 import torch.nn.functional as F
@@ -14,16 +17,16 @@ import tensorflow.keras as keras
 import xml.etree.ElementTree as ET
 
 from torch.autograd import Variable
+from torch.utils.data import DataLoader
 from torch_geometric.data import Data, Batch
 from collections import defaultdict, Counter
 from torch_geometric.nn import GATConv, global_mean_pool
-
-torch.manual_seed(42)
 
 
 class ANN(nn.Module):
     def __init__(self, genes: int, config: dict):
         super(ANN, self).__init__()
+        torch.manual_seed(config['seed'])
         
         name = self.__class__.__name__.lower()
         
@@ -45,11 +48,18 @@ class ANN(nn.Module):
     
     
 class GNN(nn.Module):
-    def __init__(self, gene_names: list, config: dict):
+    def __init__(self, gene_names: list, database: str, config: dict):
         super(GNN, self).__init__()
+        torch.manual_seed(config['seed'])
+                
         name = self.__class__.__name__.lower()
         
-        self._get_graph(gene_names, config[name]['pathways_file'])
+        pathways_file = 'data/' + database + '/pathways.gmt'
+        
+        if database not in ['kegg', 'wiki_pathways']:
+            raise ValueError('Database not supported')
+        
+        self._get_graph(gene_names, pathways_file)
         self._setup_network(config[name])
         
     def _get_graph(self, gene_names: list, pathways_file: str) -> None:
@@ -60,18 +70,19 @@ class GNN(nn.Module):
                     yield split_line[1]
         
         self.graphs = {}
-        for kegg_id in id_generator(pathways_file):
-            graph, matched_genes = self._gather_graph_info(gene_names, kegg_id)
-            if graph is not None:
-                self.graphs[kegg_id] = (graph, matched_genes)
+        for pathway_id in id_generator(pathways_file):
+            graph_data, matched_genes = self._gather_graph_info(gene_names, pathway_id)
+            if graph_data is not None:
+                self.graphs[pathway_id] = (graph_data, matched_genes)
     
     def _gather_graph_info(self, gene_names: list, pathway_id: str):
         if pathway_id.startswith('hsa'):
             graph_data, matched_genes = self._gather_kegg_info(gene_names, pathway_id)
-        elif pathway_id.startswith('wp'):
-            graph_data, matched_genes = self._gather_wp_info(gene_names, pathway_id)
-        elif pathway_id.startswith('rno'):
-            pathway_id = pathway_id[3:]
+        elif pathway_id.startswith('WP'):
+            graph_data, matched_genes = self._gather_wiki_pathways_info(gene_names, pathway_id)
+        elif pathway_id == 'None':
+            graph_data = None
+            matched_genes = None
             
         return graph_data, matched_genes
             
@@ -106,8 +117,50 @@ class GNN(nn.Module):
             
         return graph_data, matched_genes
     
-    def _gather_wp_info(self, gene_names: list, wp_id: str):
-        a=3
+    # TODO: Add in the WP tags into gmt file
+    # TODO: Validate the implementation
+    def _gather_wiki_pathways_info(self, gene_names: list, wiki_pathways_id: str):
+        gpml = pwpw.get_pathway(wiki_pathways_id)
+        root = ET.fromstring(gpml)
+        
+        namespace = {'wp': 'http://pathvisio.org/GPML/2013a'}
+
+        # Create an empty graph
+        G = nx.Graph()
+
+        # Extract nodes and their features
+        node_id_to_label = {}
+        for node in root.findall('.//wp:DataNode', namespace):
+            node_label = node.attrib['TextLabel']
+            node_id = node.attrib['GraphId']
+            node_id_to_label[node_id] = node_label
+            node_type = node.attrib['Type']
+            G.add_node(node_label, type=node_type)
+
+        # Extract edges and their features
+        for edge in root.findall('.//wp:Interaction', namespace):
+            source = None
+            target = None
+            for point in edge.findall('.//wp:Point', namespace):
+                if source is None:
+                    node_id = point.attrib['GraphRef']
+                    source = node_id_to_label[node_id]
+                else:
+                    node_id = point.attrib['GraphRef']
+                    target = node_id_to_label[node_id]
+            if source and target:
+                G.add_edge(source, target)
+        
+        nodes = pd.DataFrame(list(G.nodes(data=True)), columns=['graphics_name', 'type'])
+        edges = pd.DataFrame(list(G.edges), columns=['entry1', 'entry2'])
+        
+        node_name_to_index = {name: index for index, name in enumerate(nodes['graphics_name'])}
+        edge_index = torch.tensor(edges[['entry1', 'entry2']].apply(lambda x: x.map(node_name_to_index)).values.T, dtype=torch.long)
+        
+        matched_genes = self._match_genes_to_nodes(gene_names, nodes)
+        graph_data = Data(num_node=len(G.nodes), edge_index=edge_index, dtype=torch.long)
+        
+        return graph_data, matched_genes
     
     def _setup_network(self, config: dict) -> None:
         hidden_channels = config['hidden_channels']
@@ -211,29 +264,10 @@ class GNN(nn.Module):
         
         return self.fc3(x)
     
-    def extract_feature_importance(self):
-        weights = self.fc1.weight.detach().numpy()
-        abs_weights = np.abs(weights)
-        output_node_importance = np.sum(abs_weights, axis=1)
-        output_node_importance = output_node_importance / np.sum(output_node_importance)
-        most_important_pathways = np.argsort(output_node_importance)[::-1]
-        
-        pathways = []
-        with open(self.pathways_file, 'r') as file:
-            for line in file:
-                split_line = line.strip().split('\t')
-                pathways.append(split_line[0][5:])
-
-        with open(self.pathways_dir + 'pgnn.txt', 'w') as file:
-            for i in most_important_pathways:
-                file.write(f'{pathways[i]}: {output_node_importance[i]}\n')
-                
-            file.write(f'\nMaximum importance: {pathways[np.argmax(output_node_importance)]} = {np.max(output_node_importance)}\n')
-    
 
 class MegaGNN(GNN):
-    def __init__(self, gene_names: list, config: dict):
-        super(MegaGNN, self).__init__(gene_names, config)
+    def __init__(self, gene_names: list, database: str, config: dict):
+        super(MegaGNN, self).__init__(gene_names, database, config)
         
     def _get_graph(self, gene_names: list, pathways_file: str) -> None:
         def kegg_ids_generator(pathways_file):
@@ -357,44 +391,61 @@ class MegaGNN(GNN):
         
         return self.fc(x)  
       
-
-class MaskedLinear(nn.Linear):
-    def __init__(self, genes: list, pathways_file: str, database: str, bias: bool=False) -> None:
-        relations_file = database + '/relations.csv'
+    
+class PGNN(nn.Module):
+    def __init__(self, input_genes: dict, database: str, pathway_importance_type: str, config: dict) -> None:
+        super(PGNN, self).__init__()
+        torch.manual_seed(config['seed'])
         
-        data = self._read_from_gmt(pathways_file)
-        tcr_genes = set(genes)
+        self.name = self.__class__.__name__.lower()
+        self.pathway_importance_type = pathway_importance_type
+        relations_file = 'data/' + database + '/relations.csv'
+        self.pathways_file = 'data/' + database + '/pathways.gmt'
         
-        self.input_genes = len(tcr_genes)
-        self.output_genes = len(data)
-        super(MaskedLinear, self).__init__(self.input_genes, self.output_genes, bias)    
+        self.pathways_dir = f'pathway_importance/{database}/'
+        os.makedirs(os.path.dirname(self.pathways_dir), exist_ok=True)
+        
+        input_dims = len(input_genes)
+        pathway_data = self._read_from_gmt(self.pathways_file)
+        num_pathways = len(pathway_data)
         
         if not os.path.exists(relations_file):
-            self._build_relations(genes, data, relations_file)
+            self._build_relations(input_genes, pathway_data, relations_file)
         
-        mask = self._build_mask(relations_file)
-        self.register_buffer('mask', mask)
-
-        self.iter = 0
+        self.fc1 = nn.Linear(input_dims, num_pathways, bias=False)
+        self.fc2 = nn.Linear(num_pathways, 128)
+        self.fc3 = nn.Linear(128, 128)
+        self.fc4 = nn.Linear(128, 1)
+        
+        self.mask = self._build_mask(relations_file)
+        
+        self.loss = nn.BCEWithLogitsLoss()
+        
+        alpha = config[self.name]['alpha']
+        weight_decay = config[self.name]['weight_decay']
+        dropout_rate = config[self.name]['dropout_rate']
+        
+        self.dropout_rate = dropout_rate
+        self.optim = torch.optim.Adam(self.parameters(), lr=alpha, weight_decay=weight_decay)
     
     def _read_from_gmt(self, gmt_file: str) -> dict:        
         with open(gmt_file, 'r') as file:
-            data = {}
+            pathway_data = {}
             for line in file:
                 split_line = line.strip().split('\t')
                 pathway = split_line[0][5:]
                 tmp_genes = split_line[3:]
-                data[pathway] = tmp_genes
+                pathway_data[pathway] = tmp_genes
                 
-        return data
+        return pathway_data
     
-    def _build_relations(self, genes: list, data: dict, relations_file: str) -> None:
-        genes = [gene[:-5] for gene in genes]
+    def _build_relations(self, input_genes: list, pathway_data: dict, relations_file: str) -> None:
+        input_genes = [gene[:-5] for gene in input_genes]
         
         with open(relations_file, 'w') as file:
-            file.write(','.join(genes) + '\n')
-            for genes_from_pathway in data.values():
-                line = [1 if gene in genes_from_pathway else 0 for gene in genes]
+            file.write(','.join(input_genes) + '\n')
+            for genes_from_pathway in pathway_data.values():
+                line = [1 if gene in genes_from_pathway else 0 for gene in input_genes]
                 file.write(','.join(map(str, line)) + '\n')
                 
     def _build_mask(self, relations_file: str) -> Variable:        
@@ -410,55 +461,46 @@ class MaskedLinear(nn.Linear):
                 mask.append(l)
                 
         return Variable(torch.Tensor(mask))
-    
-    def get_num_pathways(self) -> int:
-        return self.output_genes
-
-    def forward(self, input: torch.tensor) -> torch.tensor:
-        masked_weight = self.weight * self.mask
-        return F.linear(input, masked_weight, self.bias)
-    
-class PGNN(nn.Module):
-    def __init__(self, genes: dict, config: dict) -> None:
-        super(PGNN, self).__init__()
-        self.name = self.__class__.__name__.lower()
-        self.database = config['database']
-        self.pathways_file = self.database + '/pathways.gmt'
                 
-        self.pathways_dir = f'pathway_importance/{self.database}/'
-        os.makedirs(os.path.dirname(self.pathways_dir), exist_ok=True)
+    def forward(self, x: torch.tensor) -> torch.tensor: 
+        masked_weight = self.fc1.weight * self.mask
+        masked_pathways = F.linear(x, masked_weight)
         
-        self.masked_pathways_fc = MaskedLinear(genes, self.pathways_file, self.database)
-        num_pathways = self.masked_pathways_fc.get_num_pathways()
-        self.fc1 = nn.Linear(num_pathways, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 1)
-        
-        self.loss = nn.BCEWithLogitsLoss()
-        
-        alpha = config[self.name]['alpha']
-        weight_decay = config[self.name]['weight_decay']
-        dropout_rate = config[self.name]['dropout_rate']
-        
-        self.dropout_rate = dropout_rate
-        self.optim = torch.optim.Adam(self.parameters(), lr=alpha, weight_decay=weight_decay)
-        
-    def forward(self, x: torch.tensor) -> torch.tensor:        
-        pathways = F.relu(self.masked_pathways_fc(x))
-        
-        x = F.dropout(self.fc1(pathways), p=self.dropout_rate)
+        x = F.dropout(self.fc2(masked_pathways), p=self.dropout_rate)
         x = F.relu(x)
-        x = F.dropout(self.fc2(x), p=self.dropout_rate)
+        x = F.dropout(self.fc3(x), p=self.dropout_rate)
         x = F.relu(x)
 
-        return self.fc3(x)
+        return self.fc4(x)
     
-    def extract_feature_importance(self):
-        weights = self.masked_pathways_fc.weight.detach().numpy()
-        abs_weights = np.abs(weights)
-        output_node_importance = np.sum(abs_weights, axis=1)
-        output_node_importance = output_node_importance / np.sum(output_node_importance)
-        most_important_pathways = np.argsort(output_node_importance)[::-1]
+    def extract_pathway_importance(self, test_loader: torch.utils.data.DataLoader) -> None:
+        if self.pathway_importance_type == 'naive':
+            weights = self.fc1.weight.detach().numpy()
+            mask = self.mask.detach().numpy()
+            masked_weights = weights * mask
+            values = np.sum(np.abs(masked_weights), axis=1)
+            values = values / np.sum(values)
+            most_important_pathways = np.argsort(values)[::-1]
+        elif self.pathway_importance_type == 'shap':
+            background, _ = next(iter(test_loader))
+
+            def pathway_importance_fn(pathway_weights):
+                original_weights = self.fc2.weight.data.clone()
+                self.fc2.weight.data = torch.tensor(pathway_weights, dtype=torch.float32)
+                outputs = self.forward(background)
+                self.fc2.weight.data = original_weights
+                return outputs.detach().numpy()
+
+            weights = self.fc2.weight
+            perturbed_weights = weights + torch.randn_like(weights) + 0.01
+
+            explainer = shap.DeepExplainer(self, background, pathway_importance_fn)
+
+            shap_values = explainer.shap_values(perturbed_weights)
+            values = np.mean(np.abs(shap_values), axis=0)
+            most_important_pathways = np.argsort(values)[::-1]
+        elif self.pathway_importance_type == 'lime':
+            a=3
         
         pathways = []
         with open(self.pathways_file, 'r') as file:
@@ -466,11 +508,13 @@ class PGNN(nn.Module):
                 split_line = line.strip().split('\t')
                 pathways.append(split_line[0][5:])
 
-        with open(self.pathways_dir + 'pgnn.txt', 'w') as file:
+        with open(self.pathways_dir + f'{self.pathway_importance_type}_{self.name}.csv', 'w', newline='') as file:
+            writer = csv.writer(file)
             for i in most_important_pathways:
-                file.write(f'{pathways[i]}: {output_node_importance[i]}\n')
+                writer.writerow([pathways[i], values[i]])
                 
-            file.write(f'\nMaximum importance: {pathways[np.argmax(output_node_importance)]} = {np.max(output_node_importance)}\n')
+            max_index = np.argmax(values)
+            writer.writerow(['Maximum importance', pathways[max_index], np.max(values)])
             
 
 class KPNN(keras.Model):
