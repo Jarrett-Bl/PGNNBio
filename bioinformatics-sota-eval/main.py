@@ -364,6 +364,9 @@ if __name__ == '__main__':
     train_loader, val_loader, test_loader = driver.prepare_data()
     
     for model in models:
+        if database == 'hallmark' and model != 'pgnn':
+            continue
+        
         if model == 'kpnn':
             driver.train_kpnn()
             driver.test_kpnn()

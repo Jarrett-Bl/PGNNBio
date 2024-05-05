@@ -117,8 +117,7 @@ class GNN(nn.Module):
             
         return graph_data, matched_genes
     
-    # TODO: Add in the WP tags into gmt file
-    # TODO: Validate the implementation
+    # TODO: Catch exception from 'ebcbc' node_id not being found in the node_id_to_label dictionary
     def _gather_wiki_pathways_info(self, gene_names: list, wiki_pathways_id: str):
         gpml = pwpw.get_pathway(wiki_pathways_id)
         root = ET.fromstring(gpml)
