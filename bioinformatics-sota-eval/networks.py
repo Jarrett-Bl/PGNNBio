@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import requests_cache
 import torch.nn as nn
-import networkx as nx
 import tensorflow as tf
 import pywikipathways as pwpw
 import torch.nn.functional as F
@@ -75,7 +74,7 @@ class GNN(nn.Module):
             if graph_data is not None:
                 self.graphs[pathway_id] = (graph_data, matched_genes)
     
-    def _gather_graph_info(self, gene_names: list, pathway_id: str):
+    def _gather_graph_info(self, gene_names: list, pathway_id: str) -> tuple:
         if pathway_id.startswith('hsa'):
             graph_data, matched_genes = self._gather_kegg_info(gene_names, pathway_id)
         elif pathway_id.startswith('WP'):
@@ -86,7 +85,7 @@ class GNN(nn.Module):
             
         return graph_data, matched_genes
             
-    def _gather_kegg_info(self, gene_names: list, kegg_id: str):
+    def _gather_kegg_info(self, gene_names: list, kegg_id: str) -> tuple:
         try:
             requests_cache.install_cache('pykegg_cache')
             kgml_graph = pykegg.KGML_graph(pid=kegg_id)
@@ -117,47 +116,46 @@ class GNN(nn.Module):
             
         return graph_data, matched_genes
     
-    # TODO: Catch exception from 'ebcbc' node_id not being found in the node_id_to_label dictionary
-    def _gather_wiki_pathways_info(self, gene_names: list, wiki_pathways_id: str):
+    def _gather_wiki_pathways_info(self, gene_names: list, wiki_pathways_id: str) -> tuple:
         gpml = pwpw.get_pathway(wiki_pathways_id)
         root = ET.fromstring(gpml)
         
         namespace = {'wp': 'http://pathvisio.org/GPML/2013a'}
 
-        # Create an empty graph
-        G = nx.Graph()
+        try:
+            # Extract nodes and their features
+            node_id_to_label = {}
+            for node in root.findall('.//wp:DataNode', namespace):
+                node_label = node.get('TextLabel')
+                node_id = node.get('GraphId')
+                node_id_to_label[node_id] = node_label
 
-        # Extract nodes and their features
-        node_id_to_label = {}
-        for node in root.findall('.//wp:DataNode', namespace):
-            node_label = node.attrib['TextLabel']
-            node_id = node.attrib['GraphId']
-            node_id_to_label[node_id] = node_label
-            node_type = node.attrib['Type']
-            G.add_node(node_label, type=node_type)
-
-        # Extract edges and their features
-        for edge in root.findall('.//wp:Interaction', namespace):
-            source = None
-            target = None
-            for point in edge.findall('.//wp:Point', namespace):
-                if source is None:
-                    node_id = point.attrib['GraphRef']
-                    source = node_id_to_label[node_id]
-                else:
-                    node_id = point.attrib['GraphRef']
-                    target = node_id_to_label[node_id]
-            if source and target:
-                G.add_edge(source, target)
-        
-        nodes = pd.DataFrame(list(G.nodes(data=True)), columns=['graphics_name', 'type'])
-        edges = pd.DataFrame(list(G.edges), columns=['entry1', 'entry2'])
-        
-        node_name_to_index = {name: index for index, name in enumerate(nodes['graphics_name'])}
-        edge_index = torch.tensor(edges[['entry1', 'entry2']].apply(lambda x: x.map(node_name_to_index)).values.T, dtype=torch.long)
-        
-        matched_genes = self._match_genes_to_nodes(gene_names, nodes)
-        graph_data = Data(num_node=len(G.nodes), edge_index=edge_index, dtype=torch.long)
+            # Extract edges and their features
+            edges = []
+            for edge in root.findall('.//wp:Interaction', namespace):
+                source = None
+                target = None
+                for point in edge.findall('.//wp:Point', namespace):
+                    node_id = point.get('GraphRef')
+                    if source is None:
+                        source = node_id_to_label.get(node_id)
+                    else:
+                        target = node_id_to_label.get(node_id)
+                        
+                if source and target:
+                    edges.append((source, target))
+            
+            nodes = pd.DataFrame(list(node_id_to_label.items()), columns=['node_id', 'graphics_name'])
+            edges_df = pd.DataFrame(edges, columns=['source', 'target'])
+            
+            node_name_to_index = {name: index for index, name in enumerate(nodes['graphics_name'])}
+            edge_index = torch.tensor(edges_df[['source', 'target']].apply(lambda x: x.map(node_name_to_index)).values.T, dtype=torch.long)
+            
+            matched_genes = self._match_genes_to_nodes(gene_names, nodes)
+            graph_data = Data(num_nodes=len(nodes), edge_index=edge_index, dtype=torch.long)
+        except TypeError:
+            graph_data = None
+            matched_genes = None
         
         return graph_data, matched_genes
     
@@ -234,7 +232,13 @@ class GNN(nn.Module):
             edge_attr = data.edge_attr
             batch = data.batch
             
-            x, edge_index, edge_attr, batch = x.squeeze(), edge_index.squeeze(), edge_attr.squeeze(), batch.squeeze()
+            # edge_attr is None for WikiPathways
+            x, edge_index, batch = x.squeeze(), edge_index.squeeze(), batch.squeeze()
+            try:
+                edge_attr = edge_attr.squeeze()
+            except AttributeError:
+                pass
+            
             x = x.view(num_samples * num_nodes, -1)
 
             x = self.conv1(x, edge_index, edge_attr)
@@ -269,7 +273,7 @@ class MegaGNN(GNN):
         super(MegaGNN, self).__init__(gene_names, database, config)
         
     def _get_graph(self, gene_names: list, pathways_file: str) -> None:
-        def kegg_ids_generator(pathways_file):
+        def id_generator(pathways_file):
             with open(pathways_file, 'r') as file:
                 for line in file:
                     split_line = line.strip().split('\t')
@@ -278,8 +282,8 @@ class MegaGNN(GNN):
         mega_graph = None
         mega_matched_genes = {}
         
-        for kegg_id in kegg_ids_generator(pathways_file):
-            num_nodes, matched_genes, edges_info = self._gather_graph_info(gene_names, kegg_id)
+        for pathway_id in id_generator(pathways_file):
+            num_nodes, matched_genes, edges_info = self._gather_graph_info(gene_names, pathway_id)
             if num_nodes is not None:
                 if not mega_graph:
                     mega_graph = (num_nodes, edges_info)
@@ -306,7 +310,19 @@ class MegaGNN(GNN):
         
         self.graph = (mega_graph_data, mega_matched_genes)
         
-    def _gather_graph_info(self, gene_names: list, pathway_id: str):
+    def _gather_graph_info(self, gene_names: list, pathway_id: str) -> tuple:
+        if pathway_id.startswith('hsa'):
+            num_nodes, matched_genes, edges_info = self._gather_kegg_info(gene_names, pathway_id)
+        elif pathway_id.startswith('WP'):
+            num_nodes, matched_genes, edges_info = self._gather_wiki_pathways_info(gene_names, pathway_id)
+        elif pathway_id == 'None':
+            num_nodes = None
+            matched_genes = None
+            edges_info = None
+            
+        return num_nodes, matched_genes, edges_info
+        
+    def _gather_kegg_info(self, gene_names: list, pathway_id: str):
         try:
             requests_cache.install_cache('pykegg_cache')
             kgml_graph = pykegg.KGML_graph(pid=pathway_id)
@@ -334,6 +350,48 @@ class MegaGNN(GNN):
         
         return num_nodes, matched_genes, edges_info
     
+    def _gather_wiki_pathways_info(self, gene_names: list, wiki_pathways_id: str):
+        gpml = pwpw.get_pathway(wiki_pathways_id)
+        root = ET.fromstring(gpml)
+        
+        namespace = {'wp': 'http://pathvisio.org/GPML/2013a'}
+        
+        try:
+            # Extract nodes and their features
+            node_id_to_label = {}
+            for node in root.findall('.//wp:DataNode', namespace):
+                node_label = node.get('TextLabel')
+                node_id = node.get('GraphId')
+                node_id_to_label[node_id] = node_label
+
+            # Extract edges and their features
+            edges = []
+            for edge in root.findall('.//wp:Interaction', namespace):
+                source = None
+                target = None
+                for point in edge.findall('.//wp:Point', namespace):
+                    node_id = point.get('GraphRef')
+                    if source is None:
+                        source = node_id_to_label.get(node_id)
+                    else:
+                        target = node_id_to_label.get(node_id)
+                        
+                if source and target:
+                    edges.append((source, target))
+            
+            num_nodes = len(node_id_to_label)
+            nodes_df = pd.DataFrame(list(node_id_to_label.items()), columns=['node_id', 'graphics_name'])
+            edges_info = pd.DataFrame(edges, columns=['source', 'target'])
+            edges_info['type'] = 0
+                        
+            matched_genes = self._match_genes_to_nodes(gene_names, nodes_df)
+        except TypeError:
+            num_nodes = None
+            matched_genes = None
+            edges_info = None
+        
+        return num_nodes, matched_genes, edges_info
+            
     def _setup_network(self, config: dict) -> None:
         hidden_channels = config['hidden_channels']
         num_heads = config['num_heads']
