@@ -2,7 +2,6 @@
 
 DATABASES=("kegg" "hallmark" "wiki_pathways")
 MODELS=("ann" "gnn" "pgnn" "megagnn" "kpnn")
-PATHWAY_IMPORTANCE_TYPE=("naive")
 
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -16,9 +15,8 @@ generate_job_name() {
 
 for database in "${DATABASES[@]}"; do
     for model in "${MODELS[@]}"; do
-        for importance_type in "${PATHWAY_IMPORTANCE_TYPE[@]}"; do
-            args="--database $database --model $model --pathway_importance_type $importance_type"
-            job_name=$(generate_job_name "$database" "$model" "$pathway_importance_type") 
+        args="--database $database --model $model"
+        job_name=$(generate_job_name "$database" "$model") 
 
         cat <<EOT > "$TMP_DIR/$job_name"
 #!/bin/bash	
@@ -38,7 +36,6 @@ source activate bio_eval
 python bioinformatics-sota-eval/main.py $args
 
 EOT
-        done
     done
 done
 
