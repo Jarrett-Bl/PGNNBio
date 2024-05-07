@@ -1,6 +1,6 @@
 seed: 42
 TPM: True
-patience: 25
+patience: 100
 minmax: False
 val_size: 0.2
 test_size: 0.2  

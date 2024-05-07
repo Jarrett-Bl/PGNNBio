@@ -18,7 +18,6 @@ class Driver:
                  edges_file: str, 
                  labels_file: str, 
                  database: str,
-                 pathway_importance_type: str,
                  output_dir: str
                  ) -> None:
         """
@@ -31,8 +30,9 @@ class Driver:
             output_dir (str): The path to the output directory.
         """
         
-        os.makedirs(output_dir, exist_ok=True)
-        self.output_dir = output_dir
+        self.output_dir = 'data/' + output_dir
+        
+        os.makedirs(self.output_dir, exist_ok=True)
         self.model_dir = f'{output_dir}/model'
         
         self.database = database
@@ -44,7 +44,7 @@ class Driver:
         
         self.ann = ANN(genes, self.config)
         self.gnn = GNN(genes, database, self.config)
-        self.pgnn = PGNN(genes, database, pathway_importance_type, self.config)
+        self.pgnn = PGNN(genes, database, self.config)
         self.megagnn = MegaGNN(genes, database, self.config)
         self.kpnn = KPNN(edges, genes, self.config)
         self.kpnn_vars = self.kpnn.setup_network(self.datasets[0][0], edges, outputs)
@@ -98,12 +98,15 @@ class Driver:
         Returns:
             tuple: A tuple containing the edges, genes, and outputs.
         """
+        input_file = 'data/' + input_file
+        edges_file = 'data/' + edges_file
+        labels_file = 'data/' + labels_file
         
         self.data, genes_x, barcodes_x = DataPipeline.load_input_data(input_file, config)
-        self.labels, barcodes = DataPipeline.load_data_labels(labels_file, barcodes_x, output_dir)
-        edges, genes, genes_x = DataPipeline.load_edge_data(edges_file, genes_x, output_dir)
+        self.labels, barcodes = DataPipeline.load_data_labels(labels_file, barcodes_x, self.output_dir)
+        edges, genes, genes_x = DataPipeline.load_edge_data(edges_file, genes_x, self.output_dir)
         
-        outputs, self.data, self.labels = DataPipeline.validate_data(genes_x, edges, barcodes, barcodes_x, self.data, self.labels, output_dir)
+        outputs, self.data, self.labels = DataPipeline.validate_data(genes_x, edges, barcodes, barcodes_x, self.data, self.labels, self.output_dir)
         
         self.datasets = DataPipeline.generate_datasets(self.data, genes, genes_x, barcodes, self.labels, config)
         
@@ -225,7 +228,7 @@ class Driver:
         wandb.finish()
         
         if hasattr(approach, 'extract_pathway_importance'):
-            approach.extract_pathway_importance(test_loader)
+            approach.extract_pathway_importance()
     
     def train_kpnn(self) -> None:
         """
@@ -357,9 +360,9 @@ class Driver:
             
             
 if __name__ == '__main__':
-    input_data, edge_data, data_labels, database, models, pathway_importance_type, output_dir = get_arguments()
+    input_data, edge_data, data_labels, database, models, output_dir = get_arguments()
     
-    driver = Driver(input_data, edge_data, data_labels, database, pathway_importance_type, output_dir)
+    driver = Driver(input_data, edge_data, data_labels, database, output_dir)
     
     train_loader, val_loader, test_loader = driver.prepare_data()
     
@@ -367,7 +370,7 @@ if __name__ == '__main__':
         if database == 'hallmark' and model != 'pgnn':
             continue
         
-        if model == 'kpnn':
+        if database == 'kegg' and model == 'kpnn':
             driver.train_kpnn()
             driver.test_kpnn()
             continue

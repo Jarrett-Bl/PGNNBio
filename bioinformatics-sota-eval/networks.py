@@ -1,7 +1,6 @@
 import os
 import csv
 import copy
-import shap
 import torch
 import pykegg
 import numpy as np
@@ -16,7 +15,6 @@ import tensorflow.keras as keras
 import xml.etree.ElementTree as ET
 
 from torch.autograd import Variable
-from torch.utils.data import DataLoader
 from torch_geometric.data import Data, Batch
 from collections import defaultdict, Counter
 from torch_geometric.nn import GATConv, global_mean_pool
@@ -450,12 +448,12 @@ class MegaGNN(GNN):
       
     
 class PGNN(nn.Module):
-    def __init__(self, input_genes: dict, database: str, pathway_importance_type: str, config: dict) -> None:
+    def __init__(self, input_genes: dict, database: str, config: dict) -> None:
         super(PGNN, self).__init__()
         torch.manual_seed(config['seed'])
         
         self.name = self.__class__.__name__.lower()
-        self.pathway_importance_type = pathway_importance_type
+        
         relations_file = 'data/' + database + '/relations.csv'
         self.pathways_file = 'data/' + database + '/pathways.gmt'
         
@@ -530,34 +528,13 @@ class PGNN(nn.Module):
 
         return self.fc4(x)
     
-    def extract_pathway_importance(self, test_loader: torch.utils.data.DataLoader) -> None:
-        if self.pathway_importance_type == 'naive':
-            weights = self.fc1.weight.detach().numpy()
-            mask = self.mask.detach().numpy()
-            masked_weights = weights * mask
-            values = np.sum(np.abs(masked_weights), axis=1)
-            values = values / np.sum(values)
-            most_important_pathways = np.argsort(values)[::-1]
-        elif self.pathway_importance_type == 'shap':
-            background, _ = next(iter(test_loader))
-
-            def pathway_importance_fn(pathway_weights):
-                original_weights = self.fc2.weight.data.clone()
-                self.fc2.weight.data = torch.tensor(pathway_weights, dtype=torch.float32)
-                outputs = self.forward(background)
-                self.fc2.weight.data = original_weights
-                return outputs.detach().numpy()
-
-            weights = self.fc2.weight
-            perturbed_weights = weights + torch.randn_like(weights) + 0.01
-
-            explainer = shap.DeepExplainer(self, background, pathway_importance_fn)
-
-            shap_values = explainer.shap_values(perturbed_weights)
-            values = np.mean(np.abs(shap_values), axis=0)
-            most_important_pathways = np.argsort(values)[::-1]
-        elif self.pathway_importance_type == 'lime':
-            a=3
+    def extract_pathway_importance(self) -> None:
+        weights = self.fc1.weight.detach().numpy()
+        mask = self.mask.detach().numpy()
+        masked_weights = weights * mask
+        values = np.sum(np.abs(masked_weights), axis=1)
+        values = values / np.sum(values)
+        most_important_pathways = np.argsort(values)[::-1]
         
         pathways = []
         with open(self.pathways_file, 'r') as file:
@@ -567,11 +544,9 @@ class PGNN(nn.Module):
 
         with open(self.pathways_dir + f'{self.pathway_importance_type}_{self.name}.csv', 'w', newline='') as file:
             writer = csv.writer(file)
+            writer.writerow(['Pathway Name', 'Normalized Importance Values'])
             for i in most_important_pathways:
                 writer.writerow([pathways[i], values[i]])
-                
-            max_index = np.argmax(values)
-            writer.writerow(['Maximum importance', pathways[max_index], np.max(values)])
             
 
 class KPNN(keras.Model):

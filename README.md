@@ -4,14 +4,17 @@ This repository aims to evaluate the efficacy of state-of-the-art neural network
 
 1. Knowledge-Primed Neural Network (KPNN): A sparsely connected feed-forward neural network that incorporates prior knowledge about gene hierarchies and regulatory relationships, ensuring high interpretability by mirroring the biological pathway structure.
 2. Pathway-Guided Neural Network (PGNN): A neural network that utilizes a "pathway" layer to aggregate information from multiple biological pathways, including the TCR pathway, and feeds the computed pathway scores into a densely connected artificial neural network for prediction.
-3. Graph Neural Network (GNN): A graph-based model that represents the TCR pathway as a graph, with nodes corresponding to genes and edges representing gene interactions. The GNN employs a message-passing framework and graph convolutional network (GCN) architecture to capture complex dependencies within the pathway.
-4. Artificial Neural Network (ANN): A baseline model consisting of fully connected layers, which learns to predict TCR stimulation directly from gene expression data without incorporating prior biological knowledge or structured representations.
+3. Graph Neural Network (GNN): A graph-based model that represents pathways in the specified database as a individual graphs, with nodes corresponding to genes and edges representing gene interactions. The GNN employs a message-passing framework and graph convolutional network (GCN) architecture to capture complex dependencies within the pathway,then concatenates the outputs from each graph together and passes it through a linear layer
+4. Mega GNN: Similar to the GNN but instead of individual graphs, it combines all the graphs into one "mega" graph.
+5. Artificial Neural Network (ANN): A baseline model consisting of fully connected layers, which learns to predict TCR stimulation directly from gene expression data without incorporating prior biological knowledge or structured representations.
 
 By comparing the performance and characteristics of these biologically-informed neural network architectures, this repository aims to provide insights into their strengths and weaknesses in the context of prediction, ultimately guiding future research on developing effective composite models that leverage the advantages of each approach.
 
 ## Dataset
 
-The dataset used in this study consists of single-cell RNA sequencing (scRNA-seq) data, along with corresponding biological knowledge in the form of gene hierarchies, pathway information, and graph structures. The scRNA-seq data provides gene expression measurements at the individual cell level. The biological information is used to guide and inform the creation of the neural network architectures, incorporating the relationships and dependencies between genes and pathways. The dataset also includes class labels indicating the presence or absence of TCR stimulation for each cell.
+The dataset used in this study consists of single-cell RNA sequencing (scRNA-seq) data, along with corresponding biological knowledge in the form of gene hierarchies, pathway information, and graph structures. The scRNA-seq data provides gene expression measurements at the individual cell level. The biological information is used to guide and inform the creation of the neural network architectures, incorporating the relationships and dependencies between genes and pathways. Specifically, the dataset includes TCR-related pathways obtained from the KEGG, WikiPathways, and Hallmark databases, which provide curated and well-established knowledge about the genes and their interactions involved in TCR signaling.
+
+The dataset also includes class labels indicating the presence or absence of TCR stimulation for each cell.
 
 ## Usage
 
@@ -31,7 +34,7 @@ To run the code and evaluate the models, follow these steps:
 3. Run the main script:
 
    ```
-   $ python main.py --input_data data/tcr_data.h5 --edge_data data/tcr_edge_lst.csv --data_labels data/tcr_class_labels.csv --output_dir data/tmp
+   $ python main.py --input_data "data/tcr_data.h5" --edge_data "data/tcr_edge_lst.csv" --data_labels "data/tcr_class_labels.csv" --model "pgnn" --database "kegg" --output_dir "data/tmp"
    ```
 
 ## Contributing

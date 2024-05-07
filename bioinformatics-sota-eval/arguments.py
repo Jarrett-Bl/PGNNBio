@@ -6,19 +6,19 @@ def get_arguments():
     parser.add_argument(
         '--input_data',
         type=str,
-        help='Path to the input data file (.csv or .h5)', default='data/tcr_data.h5',
+        help='Path to the input data file (.csv or .h5)', default='tcr_data.h5',
     )
     
     parser.add_argument(
         '--edge_data',
         type=str,
-        help='Path to the input edges file (.csv or .h5)', default='data/tcr_edge_lst.csv',
+        help='Path to the input edges file (.csv or .h5)', default='tcr_edge_lst.csv',
     )
     
     parser.add_argument(
         '--data_labels',
         type=str,
-        help='Path to the input labels file (.csv or .h5)', default='data/tcr_class_labels.csv',
+        help='Path to the input labels file (.csv or .h5)', default='tcr_class_labels.csv',
     )
     
     parser.add_argument(
@@ -37,18 +37,11 @@ def get_arguments():
     )
     
     parser.add_argument(
-        '--pathway_importance_type',
-        type=str,
-        choices=['naive', 'shap', 'lime'],
-        help='Method to calculate feature importance', default='shap',
-    )
-    
-    parser.add_argument(
         '--output_dir',
         type=str,
-        help='Path to the output directory', default='data/tmp/',
+        help='Path to the output directory', default='tmp/',
     )
     
     args = parser.parse_args()
     
-    return args.input_data, args.edge_data, args.data_labels, args.database, args.model, args.pathway_importance_type, args.output_dir
+    return args.input_data, args.edge_data, args.data_labels, args.database, args.model, args.output_dir
