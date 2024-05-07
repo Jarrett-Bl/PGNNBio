@@ -33,7 +33,7 @@ def get_arguments():
         type=str,
         nargs='+',
         help='Models to use',
-        default=['pgnn'],
+        default=['ann', 'gnn', 'pgnn', 'megagnn', 'kpnn'],
     )
     
     parser.add_argument(
