@@ -54,7 +54,8 @@ class GNN(nn.Module):
         pathways_file = 'data/' + database + '/pathways.gmt'
         
         if database not in ['kegg', 'wiki_pathways']:
-            raise ValueError('Database not supported')
+            print('Database not supported')
+            return
         
         self._get_graph(gene_names, pathways_file)
         self._setup_network(config[name])
@@ -542,7 +543,7 @@ class PGNN(nn.Module):
                 split_line = line.strip().split('\t')
                 pathways.append(split_line[0][5:])
 
-        with open(self.pathways_dir + f'{self.pathway_importance_type}_{self.name}.csv', 'w', newline='') as file:
+        with open(self.pathways_dir + f'{self.name}.csv', 'w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(['Pathway Name', 'Normalized Importance Values'])
             for i in most_important_pathways:

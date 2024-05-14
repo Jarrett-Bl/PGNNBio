@@ -25,7 +25,7 @@ def get_arguments():
         '--database',
         type=str,
         choices=['kegg', 'hallmark', 'wiki_pathways'],
-        help='Structure for relations data', default='wiki_pathways',
+        help='Structure for relations data', default='kegg',
     )
     
     parser.add_argument(

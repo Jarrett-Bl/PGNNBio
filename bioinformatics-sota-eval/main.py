@@ -31,9 +31,10 @@ class Driver:
         """
         
         self.output_dir = 'data/' + output_dir
+        self.model_dir = f'{output_dir}/model'
         
         os.makedirs(self.output_dir, exist_ok=True)
-        self.model_dir = f'{output_dir}/model'
+        os.makedirs(self.model_dir, exist_ok=True)
         
         self.database = database
         
